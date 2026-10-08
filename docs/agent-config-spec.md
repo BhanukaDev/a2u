@@ -1,17 +1,23 @@
-# A2U — Agent Config Spec (v0)
+# A2U — Agent Config Spec (v0.2)
 
-Status: draft · 2026-10-09. This is the surface self-serve customers build with. Code agents built with `a2u-sdk` compile to the same model.
+Status: draft · 2026-10-09. This is the surface customers build with. Code agents built with `a2u-sdk` compile to the same model.
 
 The cap on expressiveness is deliberate (see [decisions.md](decisions.md), D-006). Requests for loops or general-purpose logic are answered with webhooks or code agents, not new constructs.
+
+Changes from v0: no `sms` channel (D-013); languages per channel (D-019); `result.say` (D-017); `confirm.on_no`, `collect.retries`/`timeout`; filler per worker; consent in delivery; `schedule` triggers moved to "after v1" (D-022); current model IDs.
 
 ---
 
 ## 1. Top level
 
 ```yaml
-agent: sunrise-dental            # slug, unique per tenant
+agent: sunrise-dental            # slug, unique per workspace
 description: Front desk for Sunrise Dental
-languages: [en, si, ta]          # first is the default
+
+languages:                       # §1.1
+  default: en
+  voice: [en, ta]
+  text: [en, si, ta]
 
 front: {...}                     # §2, required
 channels: {...}                  # §3
@@ -25,22 +31,27 @@ policies: {...}                  # §10
 evals: [...]                     # §11
 ```
 
+### 1.1 Languages
+A language must be in `voice` to be spoken and in `text` to be written. Validation rejects a voice language that has no voice configured in `front.voice.voices` or that the platform has not enabled for speech (the M0 gate). The front agent detects the user's language among the enabled set for the current channel and stays in it.
+
 ## 2. Front agent
 
 ```yaml
 front:
-  persona: prompts/front_desk.md      # or inline `instructions:`
-  model: anthropic:claude-haiku-4-5
+  persona: front_desk                 # name of a persona document (editable in the console), or inline `instructions:`
+  model: anthropic:claude-haiku-5-5   # fast model for voice
   profiles:                           # optional per-channel overrides
-    whatsapp: { model: anthropic:claude-sonnet-5-5 }
+    whatsapp: { model: anthropic:claude-sonnet-5-5, max_reply_chars: 600 }
     web_chat: { model: anthropic:claude-sonnet-5-5 }
   voice:
-    stt: deepgram:nova-3
-    tts: cartesia:sonic
-    voice_id: maya
     mode: cascaded                    # cascaded | speech_to_speech
+    stt: deepgram:nova-3              # default; per-language override below
+    tts: cartesia:sonic
+    voices:                           # one voice per voice language
+      en: { voice_id: maya }
+      ta: { tts: google, voice_id: ta-IN-Wavenet-A, stt: google }
   knowledge: [clinic_faq, price_list] # read-only, answered directly
-  filler: auto                        # auto | off | list of phrases
+  filler: auto                        # default filler when a worker declares none: auto | off | [phrases]
   handoff_number: "+94 11 234 5600"   # human fallback for calls
 ```
 
@@ -48,10 +59,9 @@ front:
 
 ```yaml
 channels:
-  phone:    { numbers: ["+94 11 234 5678"], recording: false }
-  whatsapp: { account: sunrise-dental }
-  sms:      { sender: SUNRISE }
   web:      { chat: true, voice: true, mode: verified }   # anonymous | verified | both
+  phone:    { numbers: ["+94 11 234 5678"], recording: false }   # test number + PIN is always available
+  whatsapp: { account: sunrise-dental }
 ```
 
 ## 4. Memory
@@ -62,6 +72,7 @@ memory:
   link_web_to_phone: verified_only
   summary_after_turns: 10
   facts: true
+  fact_sensitivity_default: low       # low facts may be volunteered; high facts only after verify
   retention: 365d
 ```
 
@@ -74,38 +85,43 @@ workers:
   products:                      # kind: llm
     kind: llm
     description: Product questions, availability, specs   # used by routing
-    instructions: prompts/products.md
+    instructions: products       # persona/instruction document name, or inline text
     model: anthropic:claude-sonnet-5-5
     tools: [search_catalog]
     knowledge: [catalog]
+    filler: ["Let me look that up in the catalogue.", "One moment, checking stock."]
 
   insurance:                     # kind: tool
     kind: tool
     tool: insurer_check
     background: true
     timeout: 10m
+    filler: ["I'm checking with your insurer now, this can take a minute."]
 
   bookings:                      # kind: flow
     kind: flow
     description: Book, move or cancel appointments
+    filler: ["Just a second while I check the calendar."]
     steps: [...]                 # §5.2
 ```
+
+`filler` is a list of phrases the front agent rotates through while the worker is running. It never repeats the same phrase twice in a row. `filler: off` disables filler for that worker.
 
 ### 5.2 Flow steps (complete list)
 
 | Step | Shape | Behaviour |
 |---|---|---|
-| `collect` | `{ name: type \| choose(source) }` | Emits `NeedsInput`. The front agent asks; the value is validated against the type |
-| `choose` | `{ name: choose(tool_or_list), max_options: 3 }` | Offers options; the user picks one |
-| `confirm` | `"text with ${vars}"` | Explicit yes/no. A "no" ends the flow with `Failed(reason="declined")` |
-| `verify` | `otp \| knowledge: [dob, postcode]` | Identity check before continuing |
+| `collect` | `{ name: type \| choose(source), retries: 2, timeout: 2h }` | Emits `NeedsInput`. The front agent asks; the value is validated against the type. After `retries` invalid answers the flow fails with `invalid_input`; after `timeout` with `timeout`. Defaults come from `policies.collect` |
+| `choose` | `{ name: choose(tool_or_list), max_options: 3 }` | Offers options; the user picks one. Renders as a WhatsApp list, web buttons, or spoken options |
+| `confirm` | `{ text: "with ${vars}", on_no: step_name }` or a bare string | Explicit yes/no. "No" jumps to the named `collect` step, or ends the flow with `Failed(reason="declined")` if `on_no` is absent. Renders as WhatsApp buttons |
+| `verify` | `otp \| knowledge: [dob, postcode]` | Identity check before continuing. `otp` goes over WhatsApp in v1 |
 | `call_tool` | `{ name, args, as }` | Calls a tool; the result is bound to `as` |
 | `delegate` | `{ worker, args, as, background }` | Runs another worker |
 | `handoff` | `human \| worker_name` | Ends this flow and passes the conversation on |
-| `if` | `{ if: condition, then: [steps], else: [steps] }` | Branch on collected values (§5.3). Nesting depth ≤ 2 |
-| `result` | `{ data: {...}, must_say: "..." }` | Final `Result`. Defaults to the last tool result |
+| `if` | `{ if: condition, then: [steps], else: [steps] }` | Branch on bound values (§5.3). Nesting depth ≤ 2 |
+| `result` | `{ data: {...}, say: "..." }` | Final `Result`. `say` is rendered by code from bound values and sent or spoken verbatim (D-017). `data` defaults to the last tool result |
 
-No loops, no variables apart from `collect`/`as` bindings, no arbitrary code.
+No loops, no variables apart from `collect`/`as` bindings, no arbitrary code. A `collect`'s retries are the only repetition in the language.
 
 ### 5.3 Conditions
 
@@ -123,14 +139,19 @@ CEL-style expressions over bound values and customer traits: comparison, `&&`, `
 bookings:
   kind: flow
   description: Move an existing appointment
+  filler: ["Let me check the calendar."]
   steps:
     - verify: otp
     - collect: { appointment: "choose(calendar.upcoming)" }
-    - collect: { slot: "choose(calendar.free_slots, doctor=appointment.doctor)" }
-    - confirm: "Move your appointment to ${slot}?"
+    - collect: { slot: "choose(calendar.free_slots, doctor=appointment.doctor)", retries: 3 }
+    - confirm: { text: "Move your appointment to ${slot}?", on_no: slot }
     - call_tool: { name: calendar.move, args: { id: "${appointment.id}", to: "${slot}" }, as: moved }
-    - result: { data: { slot: "${slot}" }, must_say: "${slot}" }
+    - result:
+        data: { slot: "${slot}", appointment_id: "${appointment.id}" }
+        say: "Done. Your appointment is now on ${slot | date_spoken}."
 ```
+
+Templates in `say` support filters for rendering values: `date_spoken`, `time_spoken`, `money`, `digits_spoken` (reads an ID digit by digit on voice). Rendering is per channel: `date_spoken` produces "Thursday the 16th at 3:30 pm" on voice and "Thu 16 Oct, 3:30 pm" on text.
 
 ## 6. Router
 
@@ -150,9 +171,9 @@ router:
 
 ```yaml
 triggers:
-  - inbound: [phone, whatsapp, sms, web]
+  - inbound: [phone, whatsapp, web]
 
-  - api: start_call                 # POST /v1/agents/{agent}/conversations
+  - api: start_conversation          # POST /v1/agents/{agent}/conversations  { to, channel, context, goal }
 
   - webhook: hubspot.new_lead
     action: call
@@ -160,16 +181,9 @@ triggers:
     within: 60s
     context: { name: "${event.lead.name}" }
     goal: qualify_and_book
-
-  - schedule: "0 17 * * *"
-    timezone: Asia/Colombo
-    for_each: "calendar.appointments(day='tomorrow')"
-    action: whatsapp_then_call
-    template: appointment_reminder
-    call_if_no_reply: 2h
-    goal: confirm_or_reschedule
-    pacing: { max_concurrent: 5, calling_hours: "09:00-19:00" }
 ```
+
+**After v1** (D-022): `schedule` triggers with `for_each`, `pacing`, `calling_hours` and `whatsapp_then_call` sequences.
 
 ## 8. Tools
 
@@ -204,16 +218,24 @@ knowledge:
   price_list: { sources: [docs/prices.xlsx] }
 ```
 
+Sources are documents in the console; operators can replace or edit them without touching this file.
+
 ## 10. Policies
 
 ```yaml
 policies:
   pii: mask                         # mask | off
   approval: { issue_refund: "amount > 100" }
-  task_delivery: [live, whatsapp, whatsapp_template, sms]
+  collect: { retries: 2, timeout: 24h }          # defaults for collect steps
+  task_delivery:
+    order: [live, whatsapp, whatsapp_template]  # no sms in v1
+    consent: required                           # required (default) | assert_by_client
+    ask_consent: "Can I send you the result on WhatsApp when it's ready?"
   max_call_minutes: 20
   recording_disclosure: true
 ```
+
+When a background task is running and the conversation might end before it finishes, the front agent asks `ask_consent` once (if no consent record exists) and stores the answer as a consent record for `whatsapp / task_results`.
 
 ## 11. Evals
 
@@ -228,5 +250,15 @@ evals:
     simulate: { goal: "move to Wednesday afternoon", persona: polite }
     assert:
       - tool_called: calendar.move
-      - said_contains: "${result.slot}"
+      - said: "${result.slot | date_spoken}"      # exact for flow results
+      - latency_p95_ms: 1500                       # voice evals only
+
+  - name: declines the move, picks another slot
+    channel: whatsapp
+    simulate: { goal: "say no to the first slot, then accept the second", persona: terse }
+    assert:
+      - step_reached: { worker: bookings, step: slot, times: 2 }
+      - tool_called: calendar.move
 ```
+
+Evals can also be created from a real conversation in the console ("turn into eval"); the generated YAML lands here with PII masked.
