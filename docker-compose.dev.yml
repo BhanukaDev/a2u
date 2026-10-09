@@ -1,0 +1,20 @@
+# Local development only. Production runs the Helm chart against RDS (D-015).
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: a2u
+      POSTGRES_PASSWORD: a2u
+      POSTGRES_DB: a2u
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U a2u -d a2u"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres-data:

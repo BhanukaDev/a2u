@@ -1,0 +1,16 @@
+[project]
+name = "a2u-gateway"
+version = "0.0.0"
+description = "Gateway: channels, sessions, webhooks, LiveKit tokens and dispatch, outbound."
+requires-python = ">=3.12"
+dependencies = ["a2u-core"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/a2u_gateway"]
+
+[tool.uv.sources]
+a2u-core = { workspace = true }

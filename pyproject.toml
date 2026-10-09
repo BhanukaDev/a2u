@@ -1,0 +1,32 @@
+# Virtual uv workspace root. Members are the brain packages and the services.
+[tool.uv.workspace]
+members = ["packages/*", "services/*"]
+exclude = ["spikes/*"]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.400",
+    "pytest>=8.3",
+    "ruff>=0.12",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["spikes", "docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "N", "PT"]
+
+[tool.pyright]
+include = ["packages", "services"]
+exclude = ["**/.venv", "**/__pycache__", "spikes"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+# importlib mode lets every package keep a plain tests/ directory without name clashes.
+addopts = ["--import-mode=importlib", "-ra"]
+testpaths = ["packages", "services"]

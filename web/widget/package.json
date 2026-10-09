@@ -1,0 +1,11 @@
+{
+  "name": "@a2u/widget",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Embeddable widget and headless client.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  }
+}
