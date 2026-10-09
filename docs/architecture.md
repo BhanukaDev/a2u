@@ -1,6 +1,6 @@
 # A2U — Architecture
 
-Status: draft v2 · 2026-10-09 · Companion to [prd.md](prd.md). Decisions and their reasons are in [decisions.md](decisions.md). The work packages that build this are in [build-plan.md](build-plan.md).
+Status: draft v3 · 2026-10-10 · Companion to [prd.md](prd.md). Decisions and their reasons are in [decisions.md](decisions.md). The work packages that build this are in [build-plan.md](build-plan.md).
 
 ---
 
@@ -11,7 +11,9 @@ Status: draft v2 · 2026-10-09 · Companion to [prd.md](prd.md). Decisions and t
 3. **One brain, thin channels.** Channel adapters normalise input and render output. They hold no agent logic.
 4. **Only the front agent talks.** Workers return typed results. The one exception is a flow's final `result.say`, rendered verbatim by the engine.
 5. **Conversations own tasks.** Work outlives calls, turns and pods.
-6. **One chart.** The same Helm chart runs on the single k3s node in v1, on a multi-node cluster later, and in a dedicated cell for Enterprise. Only values change.
+6. **What the agent says is an action** (D-027). Commitments come only from code (`result.say`, `must_say`). Factual claims must be grounded in this turn's evidence. Every sentence is checked before it is sent.
+7. **Guard inline, watch asynchronously** (D-028). Anything that must stop a mistake is deterministic and on the hot path within its latency budget. Anything that needs an LLM to judge runs beside the conversation and acts from the next turn.
+8. **One chart.** The same Helm chart runs on the single k3s node in v1, on a multi-node cluster later, and in a dedicated cell for Enterprise. Only values change.
 
 ## 2. Planes
 
@@ -46,7 +48,7 @@ Status: draft v2 · 2026-10-09 · Companion to [prd.md](prd.md). Decisions and t
 
 | Component | Tech | Responsibility |
 |---|---|---|
-| `a2u-core` | Python library, Pydantic AI | Front agent, router, worker runtime, flow engine, worker contract, result rendering and check, memory access, channel rendering. Imported by voice workers, the gateway and task workers |
+| `a2u-core` | Python library, Pydantic AI | Front agent, router, worker runtime, flow engine, worker contract, result rendering, memory access, channel rendering, and the harness: entity capture, guards and the claim check, the watcher runtime. Imported by voice workers, the gateway and task workers |
 | `a2u-sdk` | Python, on top of `a2u-core` | The code-agent API used by the A2U team (`Agent`, `@flow`, `@worker`, `Result`, …). Config agents compile to the same in-memory model |
 | Voice worker | LiveKit Agents (Python) | Per-call job: room or SIP participant, voice activity and turn detection, speech-to-text plugin, `a2u-core` as the LLM node, text-to-speech plugin, barge-in, filler, DTMF, transfer |
 | Channel gateway | FastAPI | Web chat WebSocket, widget sessions, `POST /v1/sessions`, LiveKit token minting and agent dispatch, WhatsApp webhooks, identity resolution, outbound sending, window and consent rules |
@@ -68,10 +70,12 @@ event (user said/typed X, task event, or "flow said Y")
   → front agent LLM call with tools:
         knowledge.search (read-only)
         delegate(worker, args)            -> returns task handle immediately
-        answer_task_input(task, value)    -> resumes a NeedsInput task
+        answer_task_input(task, value)    -> resumes a NeedsInput task; entity values go through capture (§4.6)
         cancel_task(task)
-  → if the turn follows an LLM worker Result: result check (must_say / typed values vs reply)
+     context includes: this turn's evidence, steer notes from watchers (§4.7), restricted-topic rules
+  → claim check per sentence as the reply streams (§4.5): class → grounded? → send, regenerate or replace
   → render for channel → send/speak
+  → emit the turn to watchers (async, never awaited)
 ```
 
 - The front agent never holds side-effecting tools. `delegate` is the only way to cause effects.
@@ -119,14 +123,44 @@ Config flows compile to a step list interpreted by `a2u-core`. Each step is a du
 - `confirm` on "no" jumps to the step named in `on_no`, or ends with `Failed(reason="declined")` when `on_no` is absent.
 - `result` renders `say` from bound values and returns `Result(data, say=...)`.
 
-### 4.5 Result rendering and check
+### 4.5 Result rendering and the claim check
 
-Two paths, by worker kind:
+**Flow results are spoken by code.** The engine renders `result.say` and the channel adapter sends or speaks it directly. The front agent receives a `flow_said` event so its context is correct. This path has no LLM call and no check (D-017).
 
-- **Flow result (deterministic).** The engine renders `result.say` and the channel adapter sends or speaks it directly. The front agent receives a `flow_said` event so its context is correct. No LLM call, no check, no added latency.
-- **LLM worker result (checked).** The front agent drafts a reply. Before sending: pull `must_say` and user-facing typed values from `Result.data` (money, dates, times, IDs), check they appear normalised in the draft ("15:30" = "3:30 pm"), regenerate once with the error on mismatch, then fall back to a template sentence. Also block phrases claiming completion while a related task is pending.
+**Everything the front agent writes is checked, one sentence at a time** (D-027). The reply streams into a sentence buffer. Each sentence goes through these steps before it is sent or spoken:
 
-On voice the checked path buffers one sentence before text-to-speech. It is the rarer path; booking, status and payment flows use the deterministic one.
+1. **Class.** Fast rules (money, dates, percentages, IDs, words like "refund", "guarantee", "waive", "I have …") plus a small classifier label the sentence `conversation`, `information` or `commitment`.
+2. **Grounding.** `information` must be supported by this turn's evidence: tool results, flow results, `must_say`, retrieved knowledge chunks, and customer facts the conversation may reveal. Typed values must match after normalisation ("15:30" = "3:30 pm"). `commitment` must match a `result.say` or `must_say` from this turn. Anything else is unsupported.
+3. **Policy.** Never-say rules, restricted topics (no answer without an approved source), and no claim that a pending task is complete.
+4. **Verdict.** If it passes, the sentence is sent. If it fails on a text channel, the reply is regenerated once with the reason, then falls back to a template. If it fails on voice, the sentence is replaced with the policy's fallback ("Let me confirm that for you") and the agent offers a check or a handoff.
+
+Every checked sentence is written to `turn_claims` with its class, evidence references and verdict. On voice, the check adds the time to finish one sentence plus the guard budget (≤ 50 ms p95, D-028) before text-to-speech. WP-0.9 measures it.
+
+### 4.6 Entity capture
+
+`collect` steps with entity types, and identity checks such as `verify`, bind values through capture rather than taking the LLM's reading of the transcript (D-026):
+
+```
+transcript ("dedas dekai, ekasiya hathe hatha, ...")
+  → LLM proposes a candidate, with the raw spans it used
+  → parser for the type and language (chunked numbers, number words) → normalised value
+  → validator (length, format, check digit) → if invalid: re-ask; the attempt does not count
+  → read-back rendered by code (digits_spoken, spell, summary) → caller confirms
+  → value bound; downstream tools receive only bound values
+```
+
+Disagreement between the LLM's candidate and the parser's output counts as a failed parse: the agent asks again rather than picking one.
+
+### 4.7 Watchers
+
+Watchers are asynchronous tasks subscribed to a conversation's turn stream (transcript, tool calls, claim verdicts). Each one is a classifier, a rule set or an LLM judge declared in `policies.watch`. Watchers never block a turn (D-028). Their actions are:
+
+- `steer`: a short note added to the front agent's context on the next turn ("the caller asked for a refund twice; offer a handoff").
+- `escalate`: offer a handoff, or perform one for severe findings.
+- `flag`: write a `watch_flags` row, show it in the console's review queue, and offer it as an eval candidate (Prove).
+- `remediate`: draft a correction message after the conversation. It is sent only after operator approval and with consent (D-023).
+
+Watchers run in the task workers, so they survive restarts and continue after the call. Their LLM usage is metered per workspace.
 
 ## 5. Request flows
 
@@ -181,6 +215,8 @@ api_keys(id, tenant_id, kind, hash, scopes, created_at, revoked_at)
 sessions(id, tenant_id, identity_id, expires_at, act_as_token_enc)
 secrets(id, tenant_id, name, ciphertext, key_id)
 opt_outs(tenant_id, address, at)
+turn_claims(id, tenant_id, conversation_id, message_id, sentence, class, evidence jsonb, verdict, action, at)   -- claim check audit trail (D-027)
+watch_flags(id, tenant_id, conversation_id, watcher, severity, finding, action, status, eval_candidate, at)  -- watcher findings (D-028)
 ```
 
 Every tenant-scoped table carries `tenant_id`. Repositories require it, and Postgres row-level security enforces it as a second guard.
@@ -214,7 +250,7 @@ Every tenant-scoped table carries `tenant_id`. Repositories require it, and Post
 a2u/
   CLAUDE.md          how to work in this repo (read first in every session)
   packages/
-    a2u-core/        brain: front agent, router, flows, contract, memory, rendering, result check
+    a2u-core/        brain: front agent, router, flows, contract, memory, rendering; harness: capture, guards, claim check, watchers
     a2u-sdk/         code-agent API on top of core
     a2u-connectors/  built-in connectors (calendar, CRM, sheets, REST)
   services/
@@ -247,7 +283,7 @@ Not carried over: the JSON graph compiler, ports and edges, LangGraph checkpoint
 
 ## 11. Observability
 
-- One trace per turn: speech-to-text, retrieval, routing, LLM (tokens, cost), tool calls, result check, text-to-speech, each with a duration. Routing spans carry classifier scores so the console can show "why this worker".
+- One trace per turn: speech-to-text, retrieval, routing, LLM (tokens, cost), tool calls, entity capture, claim check (class and verdict per sentence), text-to-speech, each with a duration. Watcher runs are separate spans linked to the turn they scored. Routing spans carry classifier scores so the console can show "why this worker".
 - Voice dashboards: end-of-speech → first audio p50/p95 by channel, region, vendor and model.
 - Cost per conversation, by component, joined to `usage_events` for invoices.
 - PII masking is applied before traces leave the cell.

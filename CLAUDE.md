@@ -14,6 +14,9 @@ A platform for AI agents that talk to customers over web chat, web voice, phone 
 
 - **Only the front agent talks.** Workers return `Result`, `NeedsInput`, `Progress` or `Failed`, nothing else. The one exception is a flow's `result.say`, rendered by the engine and sent verbatim (D-017).
 - **The LLM understands and speaks; code decides.** Side effects happen only in typed tools called from flow steps after `confirm`, or behind an approval policy. The front agent has no side-effecting tools.
+- **What the agent says is an action** (D-027). Commitments (refunds, amounts, deadlines, "I have done X") come only from `result.say` or `must_say`. Factual claims must be grounded in this turn's evidence. Every front-agent sentence goes through the claim check before it is sent.
+- **Guard inline, watch asynchronously** (D-028). Inline guards are deterministic and within ≤ 50 ms p95 per sentence; no LLM judge on the hot path. Watchers run beside the conversation and act from the next turn.
+- **Entities are bound by code** (D-026). IDs, phone numbers, amounts and addresses are parsed, validated and read back by code before any tool sees them.
 - **Conversations own tasks.** Tasks are DBOS workflows keyed by `(tenant_id, conversation_id, task_id)`. They survive restarts and hang-ups.
 - **Every tenant-scoped query carries `tenant_id`** (the workspace ID). Repository methods require it; Postgres row-level security is the second guard. A query without it is a bug, not a shortcut.
 - **One brain, thin channels.** Channel adapters normalise input and render output. No agent logic in adapters.

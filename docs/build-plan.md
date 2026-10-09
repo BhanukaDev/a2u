@@ -1,6 +1,6 @@
 # A2U — Build Plan
 
-Status: draft · 2026-10-09. This is the plan Claude Code sessions work from. Each **work package (WP)** is sized for one session to a few sessions, has a clear "done when", and names the spec sections it implements. Milestone-level goals and exit criteria are in [milestones.md](milestones.md).
+Status: draft · 2026-10-10. This is the plan Claude Code sessions work from. Each **work package (WP)** is sized for one session to a few sessions, has a clear "done when", and names the spec sections it implements. Milestone-level goals and exit criteria are in [milestones.md](milestones.md).
 
 ## How to use this plan
 
@@ -19,8 +19,8 @@ Dependencies are listed where they are not obvious. Within a milestone, WPs are 
 
 ### [ ] WP-0.1 Speech bake-off harness
 **Goal:** word error rate and naturalness scores per vendor and language.
-**Build:** `evals/speech/` with 50 utterances per language (en-LK, si, ta, code-mixed) recorded on real phones; a script that runs each speech-to-text vendor and computes WER; a listening sheet for text-to-speech samples.
-**Done when:** `docs/spikes/speech.md` has a table per language and vendor and a go/no-go per language for voice (D-019).
+**Build:** `evals/speech/` with 50 utterances per language (en-LK, si, ta, code-mixed) recorded on real phones; a script that runs each speech-to-text vendor and computes WER; a listening sheet for text-to-speech samples. Plus an **entity corpus**: 30 NICs, 30 phone numbers and 20 amounts per language, said the way people actually say them (in chunks, with number words), each with the expected value (D-026).
+**Done when:** `docs/spikes/speech.md` has a table per language and vendor, a go/no-go per language for voice (D-019), and the raw speech-to-text accuracy on the entity corpus.
 
 ### [ ] WP-0.2 Region, LLM and LiveKit latency
 **Goal:** pick the EC2 region and default voice LLM.
@@ -51,6 +51,12 @@ Dependencies are listed where they are not obvious. Within a milestone, WPs are 
 **Goal:** a path to card billing for M5b.
 **Build:** confirm provider availability for the intended entity; list options.
 **Done when:** `docs/spikes/payments.md` and an entry in open questions or a decision.
+
+### [ ] WP-0.9 Claim check spike
+**Reads:** D-027, D-028; architecture §4.5.
+**Goal:** know whether every sentence can be checked inline within budget.
+**Build:** 300 labelled agent sentences (conversation, grounded information, unsupported information, grounded commitment, invented commitment) with their turn evidence, including Sinhala and code-mixed ones; a rules-plus-small-classifier checker; latency per sentence and precision and recall per class. Compare with an LLM judge as a baseline (offline only).
+**Done when:** `docs/spikes/claim-check.md` reports p95 latency against the 50 ms budget and recall on invented commitments, and confirms or revises D-027 and D-028.
 
 ### [ ] WP-0.8 Re-estimate
 **Done when:** milestone sizes in `milestones.md` are updated with M0 learnings, and decisions.md records the vendor list, region and LLM.
@@ -90,8 +96,26 @@ Dependencies are listed where they are not obvious. Within a milestone, WPs are 
 
 ### [ ] WP-1.7 Front agent turn loop
 **Reads:** architecture §4.1, §4.5; PRD §6.2.
-**Build:** turn loop with the four front-agent tools; per-channel profiles; pending `NeedsInput` in context with side-question handling; filler rotation per worker; `flow_said` events; result check for LLM worker results with regenerate-then-template.
-**Done when:** scripted tests show a side question answered mid-flow and the flow resumed; result check tests catch a wrong amount.
+**Build:** turn loop with the four front-agent tools; per-channel profiles; pending `NeedsInput` in context with side-question handling; filler rotation per worker; `flow_said` events; a sentence-buffer hook where the claim check (WP-1.21) plugs in; turn events emitted for watchers (WP-1.22).
+**Done when:** scripted tests show a side question answered mid-flow and the flow resumed.
+
+### [ ] WP-1.20 Entity capture
+**Reads:** D-026; spec §5.2, §5.5; architecture §4.6.
+**Depends on:** WP-1.5; the WP-0.1 entity corpus.
+**Build:** entity types with validators and normalisers; spoken-form parsers for en, si and ta (chunked numbers, number words); read-back rendering (`digits`, `spell`, `summary`); binding only after a confirmed read-back; format failures that don't use up a retry; disagreement between candidate and parser leads to a re-ask.
+**Done when:** the entity corpus passes at ≥ 99% after read-back on text, and `2002 177 0 123 4` said in Sinhala binds `200217701234`.
+
+### [ ] WP-1.21 Claim check and speech policies
+**Reads:** D-027, D-028; architecture §4.5; spec §10 `speech`.
+**Depends on:** WP-1.7, WP-0.9.
+**Build:** sentence classifier (rules plus the model chosen in WP-0.9); grounding against turn evidence with typed-value normalisation; restricted topics; never-say rules; pending-task and unconfirmed-confirmation checks; regenerate-then-template on text and fallback on voice; `turn_claims` rows; eval assertions `no_unsupported_claims`, `not_said` and `captured`.
+**Done when:** an eval where the user pushes for an out-of-policy refund passes with no unsupported commitment, a wrong amount from an LLM worker is caught, and the check stays within 50 ms p95 per sentence.
+
+### [ ] WP-1.22 Watcher runtime and review queue
+**Reads:** D-028; architecture §4.7; spec §10 `watch`.
+**Depends on:** WP-1.11, WP-1.7.
+**Build:** watchers as DBOS tasks subscribed to turn events; `rules`, `classifier` and `llm_judge` kinds; `steer` notes injected into the next turn; `escalate`; `flag` to `watch_flags`; built-in watchers (unsupported commitment, repeated misunderstanding, frustration); review queue in the console; watcher usage metered.
+**Done when:** a watcher flags a planted bad turn without adding latency to the next turn, and a `steer` note changes the next reply in a scripted test.
 
 ### [ ] WP-1.8 Memory
 **Reads:** PRD §6.9, spec §4.
@@ -158,7 +182,7 @@ Dependencies are listed where they are not obvious. Within a milestone, WPs are 
 **Done when:** a browser session talks to a config agent end to end on a dev LiveKit project.
 
 ### [ ] WP-2.2 Turn detection, barge-in and filler on voice
-**Build:** voice activity and turn detection plugins; cancel text-to-speech and in-flight LLM on barge-in; filler phrases spoken while tasks run; task events spoken at turn boundaries.
+**Build:** voice activity and turn detection plugins; cancel text-to-speech and in-flight LLM on barge-in; filler phrases spoken while tasks run; task events spoken at turn boundaries; idle check-in and hang-up (`policies.idle`).
 **Done when:** barge-in works in ≥ 95% of 100 scripted interruptions.
 
 ### [ ] WP-2.3 Gateway voice endpoints
@@ -167,8 +191,8 @@ Dependencies are listed where they are not obvious. Within a milestone, WPs are 
 
 ### [ ] WP-2.4 Speculative retrieval and spoken rendering
 **Reads:** architecture §4.1, §4.5; spec §5.4 filters.
-**Build:** start knowledge retrieval on interim transcripts; `date_spoken`, `time_spoken`, `money`, `digits_spoken` filters; result check on streamed text for LLM worker results, sentence-buffered.
-**Done when:** the booking flow's result is spoken verbatim with a natural date, and a wrong amount from an LLM worker is caught before audio.
+**Build:** start knowledge retrieval on interim transcripts; `date_spoken`, `time_spoken`, `money`, `digits_spoken` filters; the claim check on streamed text, sentence-buffered, before text-to-speech; voice fallback sentence; entity read-back on voice.
+**Done when:** the booking flow's result is spoken verbatim with a natural date, an invented commitment and a wrong amount are caught before audio, and the latency target still holds with the check on.
 
 ### [ ] WP-2.5 Latency tracing and dashboard
 **Reads:** architecture §11.
@@ -276,8 +300,8 @@ Dependencies are listed where they are not obvious. Within a milestone, WPs are 
 **Done when:** an operator can answer "which worker fails most, and show me examples" from the console.
 
 ### [ ] WP-5.3 Eval from transcript and replay
-**Build:** "turn into eval" on a conversation with PII masked; replay against a draft version.
-**Done when:** a real conversation becomes a passing eval in one click.
+**Build:** "turn into eval" on a conversation with PII masked, also from a watcher flag in the review queue; replay against a draft version; watcher `remediate` drafts with operator approval.
+**Done when:** a real conversation becomes a passing eval in one click, and a flagged conversation becomes a failing eval until the agent is fixed.
 
 ### [ ] WP-5.4 Invoices
 **Build:** monthly invoice generation from `usage_events` per org with per-workspace lines, USD and LKR, PDF export, status tracking.

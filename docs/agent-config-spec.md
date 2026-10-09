@@ -1,8 +1,10 @@
-# A2U — Agent Config Spec (v0.2)
+# A2U — Agent Config Spec (v0.3)
 
-Status: draft · 2026-10-09. This is the surface customers build with. Code agents built with `a2u-sdk` compile to the same model.
+Status: draft · 2026-10-10. This is the surface customers build with. Code agents built with `a2u-sdk` compile to the same model.
 
 The cap on expressiveness is deliberate (see [decisions.md](decisions.md), D-006). Requests for loops or general-purpose logic are answered with webhooks or code agents, not new constructs.
+
+Changes in v0.3: entity types for `collect` with read-back (§5.5, D-026); `policies.speech` for claim classes, restricted topics and never-say rules (D-027); `policies.watch` (D-028); `policies.idle`; eval assertions on claims.
 
 Changes from v0: no `sms` channel (D-013); languages per channel (D-019); `result.say` (D-017); `confirm.on_no`, `collect.retries`/`timeout`; filler per worker; consent in delivery; `schedule` triggers moved to "after v1" (D-022); current model IDs.
 
@@ -111,7 +113,7 @@ workers:
 
 | Step | Shape | Behaviour |
 |---|---|---|
-| `collect` | `{ name: type \| choose(source), retries: 2, timeout: 2h }` | Emits `NeedsInput`. The front agent asks; the value is validated against the type. After `retries` invalid answers the flow fails with `invalid_input`; after `timeout` with `timeout`. Defaults come from `policies.collect` |
+| `collect` | `{ name: type \| entity \| choose(source), retries: 2, timeout: 2h, readback: digits }` | Emits `NeedsInput`. The front agent asks; the value is validated against the type. Entity types (§5.5) are parsed, validated and read back by code before binding, and a format failure does not use up a retry. After `retries` invalid answers the flow fails with `invalid_input`; after `timeout` with `timeout`. Defaults come from `policies.collect` |
 | `choose` | `{ name: choose(tool_or_list), max_options: 3 }` | Offers options; the user picks one. Renders as a WhatsApp list, web buttons, or spoken options |
 | `confirm` | `{ text: "with ${vars}", on_no: step_name }` or a bare string | Explicit yes/no. "No" jumps to the named `collect` step, or ends the flow with `Failed(reason="declined")` if `on_no` is absent. Renders as WhatsApp buttons |
 | `verify` | `otp \| knowledge: [dob, postcode]` | Identity check before continuing. `otp` goes over WhatsApp in v1 |
@@ -152,6 +154,29 @@ bookings:
 ```
 
 Templates in `say` support filters for rendering values: `date_spoken`, `time_spoken`, `money`, `digits_spoken` (reads an ID digit by digit on voice). Rendering is per channel: `date_spoken` produces "Thursday the 16th at 3:30 pm" on voice and "Thu 16 Oct, 3:30 pm" on text.
+
+### 5.5 Entity types
+
+Entity types are used in `collect` and in `verify: knowledge`. Each type has spoken-form parsers per language, a validator and a default read-back. The LLM proposes a value; code decides whether it is valid and what is read back (D-026).
+
+| Type | Validates | Default read-back |
+|---|---|---|
+| `nic_lk` | 12 digits (new) or 9 digits + `V`/`X` (old); birth year and day plausible | `digits` |
+| `phone` | E.164 after normalisation for `region` (default from the workspace), mobile or landline | `digits` |
+| `person_name` | Non-empty; script recorded (Latin, Sinhala, Tamil) | `spell` on voice when the caller asks or confidence is low |
+| `address` | Required parts per country; optional geocoder check | `summary` |
+| `money` | Amount and currency; range limits from `max` | `summary` |
+| `date`, `time` | Calendar-valid, within `min`/`max` | `summary` |
+| `email` | Syntax; optional MX check | `spell` |
+| `account_no`, `id` | Length and pattern set by the builder (`pattern: "\\d{10}"`); optional check-digit scheme | `digits` |
+
+Read-back modes: `digits` (each digit spoken on its own, zeros included), `spell` (letter by letter), `summary` (a natural rendering, such as "Thursday the 16th at 3:30 pm"), `none`. Parsers understand numbers spoken in chunks ("two thousand two, one seventy seven" → `2002177`) and Sinhala and Tamil number words. When the LLM's candidate and the parser disagree, the agent asks again.
+
+```yaml
+- collect: { nic: nic_lk }
+- collect: { mobile: { type: phone, region: LK } }
+- collect: { amount: { type: money, currency: LKR, max: 500000 } }
+```
 
 ## 6. Router
 
@@ -232,8 +257,34 @@ policies:
     consent: required                           # required (default) | assert_by_client
     ask_consent: "Can I send you the result on WhatsApp when it's ready?"
   max_call_minutes: 20
+  idle: { prompt_after: 30s, hangup_after: 45s }  # "are you still there?", then a polite hang-up
   recording_disclosure: true
+
+  speech:                                         # D-027
+    claim_check: on                               # on (default) | off (only for internal test agents)
+    restricted_topics:                            # answer only from these sources, otherwise hand off
+      refunds: { sources: [refund_policy], otherwise: handoff }
+      medical_advice: { sources: [], otherwise: "I can't advise on that, but I can connect you to a nurse." }
+    never_say:
+      - "promise or guarantee a refund"
+      - "quote a price not in price_list"
+    fallback: "Let me confirm that for you."      # spoken in place of an unsupported sentence on voice
+
+  watch:                                          # D-028, asynchronous, never blocks a turn
+    - name: unsupported_commitment
+      kind: llm_judge                             # llm_judge | classifier | rules
+      model: fast
+      prompt: "Did the agent promise anything the evidence does not support?"
+      action: flag                                # steer | escalate | flag | remediate
+    - name: frustration
+      kind: classifier
+      labels: [frustrated, neutral]
+      when: "frustrated for 2 turns"
+      action: steer
+      note: "Acknowledge the frustration and offer a human."
 ```
+
+Every front-agent sentence is checked before it is sent: `conversation` sentences are free, `information` must be grounded in this turn's evidence, and `commitment` only comes from `result.say` or `must_say` (architecture §4.5). Watchers act from the next turn onward and never change a turn that has already been sent.
 
 When a background task is running and the conversation might end before it finishes, the front agent asks `ask_consent` once (if no consent record exists) and stores the answer as a consent record for `whatsapp / task_results`.
 
@@ -252,6 +303,8 @@ evals:
       - tool_called: calendar.move
       - said: "${result.slot | date_spoken}"      # exact for flow results
       - latency_p95_ms: 1500                       # voice evals only
+      - no_unsupported_claims: true                # every information/commitment sentence grounded
+      - captured: { nic: "200217701234" }          # entity bound exactly, after read-back
 
   - name: declines the move, picks another slot
     channel: whatsapp
@@ -261,4 +314,6 @@ evals:
       - tool_called: calendar.move
 ```
 
-Evals can also be created from a real conversation in the console ("turn into eval"); the generated YAML lands here with PII masked.
+Evals can also be created from a real conversation in the console ("turn into eval"); the generated YAML lands here with PII masked. Conversations flagged by a watcher are offered as eval candidates (Prove, D-025).
+
+Other claim assertions: `not_said: "refund"`, `claim_class: { contains: commitment, from: result.say }`, `watch_flagged: { watcher: unsupported_commitment, expect: false }`.

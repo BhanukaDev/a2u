@@ -1,20 +1,20 @@
 # A2U — Milestones to v1
 
-Status: draft v2 · 2026-10-09. Order follows D-016: web chat → web voice → phone → WhatsApp. Each milestone ends in something usable, with exit criteria that are measured, not felt. The detailed work packages are in [build-plan.md](build-plan.md).
+Status: draft v3 · 2026-10-10. Order follows D-016: web chat → web voice → phone → WhatsApp. Each milestone ends in something usable, with exit criteria that are measured, not felt. The detailed work packages are in [build-plan.md](build-plan.md).
 
 Sizes assume one engineer working with Claude Code, so typing is cheap and integration against real vendors, devices and carriers is what costs time. They are re-estimated at the end of M0 and again at the end of M1.
 
 | # | Milestone | Rough size | Ends with |
 |---|---|---|---|
 | M0 | De-risk | 2–3 weeks | Go/no-go answers on speech vendors, region, LiveKit, DBOS, numbers, WhatsApp, payments |
-| M1 | Brain + web chat | 6–8 weeks | A config agent with workers, flows and background tasks, live on web chat for a design partner |
+| M1 | Brain + web chat + harness | 7–9 weeks | A config agent with workers, flows and background tasks, live on web chat for a design partner |
 | M2 | Web voice | 4–5 weeks | Browser voice meeting the latency target from Sri Lanka |
 | M3 | Phone | 3–4 weeks | Inbound calls through LiveKit SIP, shared test number, API-triggered outbound |
 | M4 | WhatsApp + cross-channel + delivery | 5–6 weeks | A conversation spanning call and WhatsApp; results delivered after hang-up |
 | M5 | Operate + launch | 4–5 weeks | Three paying design partners, invoices, operations, docs |
 | M5b | Self-serve (on pull) | 4–5 weeks | Public sign-up, prepaid credits, abuse controls |
 
-Total to M5: roughly 24–31 weeks. Design partners (2–3 businesses using it free or at a discount, then invoiced) join at M1 and stay through launch. Their traffic is the test.
+Total to M5: roughly 25–32 weeks. M1 grew by about a week when the reliability harness (D-025) was added. Design partners (2–3 businesses using it free or at a discount, then invoiced) join at M1 and stay through launch. Their traffic is the test.
 
 ---
 
@@ -22,7 +22,8 @@ Total to M5: roughly 24–31 weeks. Design partners (2–3 businesses using it f
 
 Spikes, each ending in a short written result in `docs/spikes/`. Several run in parallel because they are mostly waiting on vendors.
 
-- **Speech bake-off.** 50 real utterances each in English (Sri Lankan accent), Sinhala, Tamil and code-mixed speech. Score speech-to-text word error rate and text-to-speech naturalness for Deepgram, Google, ElevenLabs, Cartesia and Gemini Live. **Gate:** which languages launch on voice (D-019).
+- **Speech bake-off.** 50 real utterances each in English (Sri Lankan accent), Sinhala, Tamil and code-mixed speech. Score speech-to-text word error rate and text-to-speech naturalness for Deepgram, Google, ElevenLabs, Cartesia and Gemini Live. **Gate:** which languages launch on voice (D-019). It also records an entity corpus of NICs, phone numbers and amounts said naturally (in chunks, with local number words) to test entity parsers (D-026).
+- **Claim check latency.** Can a sentence be classed and grounded in ≤ 50 ms p95 with rules plus a small classifier, and with what precision and recall on invented commitments (D-027, D-028)?
 - **Region, LLM endpoint and LiveKit.** Round-trip times from Colombo to Mumbai and Singapore, from each to LiveKit Cloud's nearest region, to the speech vendors, and LLM time to first token for Haiku 5.5 and a fast Gemini model from each region. Pick the EC2 region and the default voice LLM.
 - **LiveKit Agents end to end.** A throwaway agent: browser → LiveKit room → Deepgram → trivial LLM → Cartesia, measured from Sri Lanka. Then the same agent answering a Twilio SIP trunk call via LiveKit SIP. Confirms D-012 and D-024 and gives a latency floor before any of our code exists.
 - **Durability.** DBOS with 200 concurrent workflows; `LISTEN/NOTIFY` on direct connections versus DBOS workflow events for fan-out; how Pydantic AI's durable execution integration fits.
@@ -33,10 +34,11 @@ Spikes, each ending in a short written result in `docs/spikes/`. Several run in 
 
 **Exit:** vendor list, region, LLM endpoint, number supply, WhatsApp path and payment path written in [decisions.md](decisions.md). Milestone sizes re-estimated.
 
-## M1 — Brain + web chat
+## M1 — Brain + web chat + harness
 
 - Repo scaffold per [architecture.md §9](architecture.md#9-repository-layout): uv workspace, bun, CI, lint, type check, tests, `docker-compose.dev.yml`.
-- `a2u-core`: front agent, worker contract, `llm`/`tool`/`flow` workers, flow engine with all steps from the spec including `say` rendering, `collect` retries and `confirm.on_no`, router (all three modes), result check for LLM worker results.
+- `a2u-core`: front agent, worker contract, `llm`/`tool`/`flow` workers, flow engine with all steps from the spec including `say` rendering, `collect` retries and `confirm.on_no`, router (all three modes).
+- Reliability harness (D-025): entity capture with parsers, validators and read-back; the claim check on every sentence with restricted topics and never-say rules; the `turn_claims` audit trail; the watcher runtime with `steer`, `escalate` and `flag`; a review queue in the console.
 - Config loader and validator for spec v0.2; documents (persona, instructions); versions and deploys in the control API; plain-language diff.
 - Postgres schema (architecture §6), orgs and workspaces, tenant isolation with row-level security, migrations.
 - Memory: customers, identities, summaries, facts with sensitivity.
@@ -54,20 +56,23 @@ Spikes, each ending in a short written result in `docs/spikes/`. Several run in 
 - Evals block a bad deploy.
 - Zero cross-tenant reads in the isolation test suite.
 - A background task started in chat delivers its result into the same chat at the next turn boundary.
+- An eval where the user pushes for a refund the policy does not allow passes with zero unsupported commitments, and a version whose prompt invites invented refunds is blocked.
+- Entity capture gets ≥ 99% of the WP-0.1 entity corpus right after read-back, for each enabled text language.
 
 ## M2 — Web voice
 
 - Voice worker on LiveKit Agents: `a2u-core` as the LLM node, speech-to-text and text-to-speech plugins per language, voice activity and turn detection, barge-in, filler, streaming.
 - Gateway: LiveKit token minting and agent dispatch; conversation shared between chat and voice in the same widget session.
 - Speculative knowledge retrieval on interim transcripts.
-- Deterministic `say` on voice with spoken filters; result check on streamed text for LLM worker results.
+- Deterministic `say` on voice with spoken filters; claim check on streamed text, sentence-buffered, within the guard budget.
+- Idle handling (check-in, then a polite hang-up) and the call-length cap.
 - Per-stage latency tracing and dashboard; voice usage metering by component.
 - Widget: voice button, mic permissions, bot check for anonymous users.
 - Playground: browser voice; voice evals with latency assertions.
 - Optional recording with disclosure.
 
 **Exit:**
-- p50 ≤ 900 ms and p95 ≤ 1.5 s from end of speech to first audio over 300 browser sessions from Sri Lanka.
+- p50 ≤ 900 ms and p95 ≤ 1.5 s from end of speech to first audio over 300 browser sessions from Sri Lanka, with the claim check on.
 - Barge-in works in ≥ 95% of scripted interruptions.
 - A design partner uses web voice on their site.
 - Measured cost per minute supports the pricing hypothesis.
@@ -105,7 +110,8 @@ Spikes, each ending in a short written result in `docs/spikes/`. Several run in 
 
 - Approvals in the console and by webhook; webhook triggers.
 - Analytics: volume, containment, outcomes per goal, latency percentiles, cost per conversation.
-- Generated agent diagram, clickable into conversations; routing confusion matrix; eval-from-transcript.
+- Generated agent diagram, clickable into conversations; routing confusion matrix; eval-from-transcript and eval-from-flag.
+- Watcher `remediate` with operator approval; custom watchers per agent.
 - Invoices from metering (USD and LKR), per org with per-workspace lines.
 - Business-tier data settings: retention, no-recording, own LLM keys, audit export, SSO via Clerk.
 - Operations: node rebuild drill under 30 minutes, RDS restore drill, load test at 100 concurrent calls, runbooks, alerts, status page.
@@ -130,3 +136,4 @@ Spikes, each ending in a short written result in `docs/spikes/`. Several run in 
 - Second node for voice; EKS and dedicated cells for Enterprise; VPC deploys.
 - Sinhala voice when the speech gate passes; speech-to-speech mode GA; client OIDC; more connectors.
 - SOC 2 Type I readiness.
+- Safety-critical profile and tier (D-029): emergency response, triage, dispatch.

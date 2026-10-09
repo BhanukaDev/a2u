@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A2U voice spike</title>
+  <style>
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 16px; }
+    button { font-size: 1rem; padding: .6rem 1.2rem; }
+    button.small { font-size: .85rem; padding: .25rem .6rem; }
+    input, select, textarea { font: inherit; padding: .4rem; box-sizing: border-box; }
+    #status { color: #666; margin-left: .5rem; }
+    #log { margin-top: 1rem; }
+    .user { color: #0a5; } .agent { color: #05a; } .tool { color: #888; font: 12px ui-monospace, monospace; }
+    table { border-collapse: collapse; margin-top: 1rem; width: 100%; font-variant-numeric: tabular-nums; }
+    td, th { border-bottom: 1px solid #ddd; padding: .25rem .5rem; text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    fieldset { border: 1px solid #ddd; border-radius: 8px; padding: .75rem 1rem 1rem; margin: 1rem 0; }
+    fieldset:disabled { opacity: .6; }
+    legend { font-weight: 600; padding: 0 .3rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: .6rem 1rem; }
+    label { display: flex; flex-direction: column; font-size: .85rem; color: #444; gap: .2rem; }
+    label.wide { grid-column: 1 / -1; }
+    textarea { width: 100%; min-height: 14rem; font: 13px/1.45 ui-monospace, monospace; }
+    .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: .6rem; }
+    .hint { font-size: .8rem; color: #777; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>A2U voice spike</h1>
+  <p>
+    <input id="client" placeholder="label, e.g. colombo-4g" value="unknown">
+    <button id="connect">Start call</button>
+    <span id="status">idle</span>
+  </p>
+
+  <fieldset id="settings">
+    <legend>Agent settings <span class="hint">(applied when the next call starts)</span></legend>
+    <div class="row">
+      Presets:
+      <button class="small" data-preset="english">English, fast (Deepgram)</button>
+      <button class="small" data-preset="sinhala">Sinhala (all Gemini)</button>
+      <button class="small" id="reset">Reset all to .env defaults</button>
+    </div>
+    <div class="grid">
+      <label>Speech-to-text <select id="stt_provider"></select></label>
+      <label>LLM <select id="llm_provider"></select></label>
+      <label>LLM model <select id="llm_model"></select></label>
+      <label>Text-to-speech <select id="tts_provider"></select></label>
+      <label id="tts_model_label">TTS model <select id="tts_model"></select></label>
+      <label>Voice
+        <select id="tts_voice_select"></select>
+        <input id="tts_voice_text" placeholder="Cartesia voice ID (blank = default)" hidden>
+      </label>
+      <label id="langs_label">Gemini STT languages <input id="stt_languages" placeholder="si-LK,en-US (blank = auto-detect)"></label>
+      <label id="style_label">Voice style (Gemini TTS) <input id="tts_instructions" placeholder="e.g. Speak calmly, at a measured pace."></label>
+      <label class="wide">Greeting <input id="greeting"></label>
+      <label class="wide">
+        <span>Story (system prompt) · <button class="small" id="reset_story" type="button">reset to ABC Bank scenario</button></span>
+        <textarea id="story" spellcheck="false"></textarea>
+        <span class="hint">Voice rules (short spoken replies, reply in the caller's language, native script) are always added after this.</span>
+      </label>
+    </div>
+  </fieldset>
+
+  <p id="summary"></p>
+  <table>
+    <thead><tr><th>#</th><th>e2e</th><th>stt</th><th>end of turn</th><th>LLM ttft</th><th>TTS ttfb</th></tr></thead>
+    <tbody id="turns"></tbody>
+  </table>
+  <div id="log"></div>
+
+  <script type="module">
+    import { Room, RoomEvent, Track } from "https://cdn.jsdelivr.net/npm/livekit-client@2.22.3/+esm";
+
+    const $ = (id) => document.getElementById(id);
+    let room = null;
+    const e2e = [];
+    const FIELDS = ["stt_provider", "llm_provider", "llm_model", "tts_provider", "tts_model", "stt_languages", "tts_instructions", "greeting", "story"];
+    const STORE = "a2u-spike-settings";
+
+    const ms = (v) => (v == null ? "-" : `${Math.round(v * 1000)}`);
+    const pct = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
+
+    const status = (msg, isError = false) => {
+      $("status").textContent = msg;
+      $("status").style.color = isError ? "#c00" : "";
+      console.log("[spike]", msg);
+    };
+
+    // ---- settings panel ----------------------------------------------------
+
+    const cfg = await (await fetch("/config")).json();
+    const LABELS = { deepgram: "Deepgram", gemini: "Gemini", anthropic: "Claude (Anthropic)", cartesia: "Cartesia", echo: "Echo (no LLM)" };
+
+    const fill = (sel, values) => {
+      sel.innerHTML = values.map((v) => {
+        const noKey = v in cfg.keys_present && !cfg.keys_present[v];
+        return `<option value="${v}" ${noKey ? "disabled" : ""}>${LABELS[v] ?? v}${noKey ? " (no key in .env)" : ""}</option>`;
+      }).join("");
+    };
+    fill($("stt_provider"), cfg.providers.stt);
+    fill($("llm_provider"), cfg.providers.llm);
+    fill($("tts_provider"), cfg.providers.tts);
+
+    function refreshVoiceControls(voice = "") {
+      const provider = $("tts_provider").value;
+      const voices = cfg.voices[provider] ?? [];
+      const free = voices.length === 0;
+      $("tts_voice_select").hidden = free;
+      $("tts_voice_text").hidden = !free;
+      if (free) {
+        $("tts_voice_text").value = voice;
+      } else {
+        const pretty = (v) => v.replace(/^aura-2-/, "").replace(/-en$/, "");
+        $("tts_voice_select").innerHTML = voices.map((v) => `<option value="${v}">${pretty(v)}</option>`).join("");
+        $("tts_voice_select").value = voices.includes(voice) ? voice : (cfg.default_voice[provider] || voices[0]);
+      }
+      const models = cfg.llm_models[$("llm_provider").value] ?? [""];
+      const current = $("llm_model").value;
+      $("llm_model").innerHTML = models.map((m) => `<option value="${m}">${m || "(none)"}</option>`).join("");
+      $("llm_model").value = models.includes(current) ? current : models[0];
+      const ttsModels = cfg.tts_models[provider] ?? [];
+      const currentTts = $("tts_model").value;
+      $("tts_model").innerHTML = ttsModels.map((m) => `<option value="${m}">${m}</option>`).join("");
+      $("tts_model").value = ttsModels.includes(currentTts) ? currentTts : ttsModels[0];
+      $("tts_model_label").hidden = provider !== "gemini";
+      $("style_label").hidden = provider !== "gemini";
+      $("langs_label").hidden = $("stt_provider").value !== "gemini";
+    }
+
+    const voiceValue = () => ($("tts_voice_select").hidden ? $("tts_voice_text").value : $("tts_voice_select").value);
+
+    function read() {
+      const s = Object.fromEntries(FIELDS.map((f) => [f, $(f).value]));
+      s.tts_voice = voiceValue();
+      return s;
+    }
+
+    function write(s) {
+      for (const f of FIELDS) if (s[f] != null && f !== "llm_model" && f !== "tts_model") $(f).value = s[f];
+      refreshVoiceControls(s.tts_voice ?? "");
+      const models = cfg.llm_models[$("llm_provider").value] ?? [""];
+      if (models.includes(s.llm_model)) $("llm_model").value = s.llm_model;
+      const ttsModels = cfg.tts_models[$("tts_provider").value] ?? [];
+      if (ttsModels.includes(s.tts_model)) $("tts_model").value = s.tts_model;
+    }
+
+    function save() { try { localStorage.setItem(STORE, JSON.stringify(read())); } catch {} }
+
+    const PRESETS = {
+      english: { stt_provider: "deepgram", tts_provider: "deepgram", tts_voice: "aura-2-andromeda-en",
+                 greeting: "Hi, thank you for calling ABC Bank. This is Nadeesha. How can I help you today?" },
+      sinhala: { stt_provider: "gemini", tts_provider: "gemini", tts_voice: "Sulafat", stt_languages: "si-LK,en-US",
+                 greeting: "ආයුබෝවන්, ABC Bank එකට කතා කළාට ස්තුතියි. මම නදීෂා. මට ඔබට උදව් කරන්න පුළුවන් කොහොමද?" },
+    };
+
+    document.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => { write({ ...read(), ...PRESETS[b.dataset.preset] }); save(); }));
+    $("reset").onclick = () => { write(cfg.defaults); save(); };
+    $("reset_story").onclick = () => { $("story").value = cfg.default_story; save(); };
+    $("tts_provider").onchange = () => { refreshVoiceControls(); save(); };
+    $("stt_provider").onchange = () => { refreshVoiceControls(voiceValue()); save(); };
+    $("llm_provider").onchange = () => { refreshVoiceControls(voiceValue()); save(); };
+    $("settings").addEventListener("input", save);
+    $("settings").addEventListener("change", save);
+
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(STORE)); } catch {}
+    write({ ...cfg.defaults, ...(saved ?? {}) });
+
+    // ---- call --------------------------------------------------------------
+
+    $("connect").onclick = async () => {
+      if (room) { await room.disconnect(); return; }
+      try {
+        await start();
+      } catch (err) {
+        console.error(err);
+        status(`error: ${err?.message ?? err}`, true);
+        if (room) { await room.disconnect(); room = null; }
+        $("settings").disabled = false;
+      }
+    };
+
+    async function start() {
+      status("getting token…");
+      const res = await fetch("/token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ client: $("client").value, settings: read() }),
+      });
+      if (!res.ok) throw new Error(`token server returned ${res.status}`);
+      const { url, token } = await res.json();
+
+      room = new Room({ adaptiveStream: true, dynacast: true });
+      $("settings").disabled = true;
+
+      room.on(RoomEvent.TrackSubscribed, (track) => {
+        if (track.kind === Track.Kind.Audio) document.body.appendChild(track.attach());
+      });
+      room.on(RoomEvent.Disconnected, (reason) => {
+        room = null; $("settings").disabled = false;
+        status(`disconnected (${reason ?? "hung up"})`); $("connect").textContent = "Start call";
+      });
+      room.on(RoomEvent.ParticipantAttributesChanged, (attrs, p) => {
+        const state = attrs["lk.agent.state"];
+        if (p.isAgent && state && !$("status").style.color) status(`agent ${state}`);
+      });
+      room.on(RoomEvent.ParticipantConnected, (p) => {
+        if (p.isAgent) status(`agent joined (${p.identity}), waiting for greeting…`);
+      });
+      room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+        if (!room.canPlaybackAudio) status("browser blocked audio: click Start call again", true);
+      });
+
+      room.registerTextStreamHandler("lk.transcription", async (reader, info) => {
+        const text = await reader.readAll();
+        if (!text.trim()) return;
+        const who = info.identity === room.localParticipant.identity ? "user" : "agent";
+        const p = document.createElement("div");
+        p.className = who; p.textContent = `${who}: ${text}`;
+        $("log").prepend(p);
+      });
+
+      room.registerTextStreamHandler("a2u.tool", async (reader) => {
+        const p = document.createElement("div");
+        p.className = "tool"; p.textContent = `tool: ${await reader.readAll()}`;
+        $("log").prepend(p);
+      });
+
+      room.registerTextStreamHandler("a2u.warning", async (reader) => {
+        const p = document.createElement("div");
+        p.className = "tool"; p.style.color = "#b60"; p.textContent = `warning: ${await reader.readAll()}`;
+        $("log").prepend(p);
+      });
+
+      room.registerTextStreamHandler("a2u.error", async (reader) => {
+        status(`agent error: ${await reader.readAll()}`, true);
+      });
+
+      room.registerTextStreamHandler("a2u.metrics", async (reader) => {
+        const t = JSON.parse(await reader.readAll());
+        if (t.e2e != null) e2e.push(t.e2e);
+        const row = document.createElement("tr");
+        row.innerHTML = `<td>${$("turns").children.length + 1}${t.interrupted ? " (int)" : ""}</td>` +
+          [t.e2e, t.transcription_delay, t.end_of_turn_delay, t.llm_ttft, t.tts_ttfb].map((v) => `<td>${ms(v)}</td>`).join("");
+        $("turns").prepend(row);
+        if (e2e.length) $("summary").textContent =
+          `${e2e.length} turns · e2e p50 ${ms(pct(e2e, 0.5))} ms · p95 ${ms(pct(e2e, 0.95))} ms (agent side, excludes network to you)`;
+      });
+
+      status("connecting to LiveKit…");
+      await room.connect(url, token);
+      await room.startAudio(); // still inside the click, so autoplay is allowed
+      status("asking for microphone…");
+      await room.localParticipant.setMicrophoneEnabled(true);
+      $("connect").textContent = "Hang up";
+      const agentHere = [...room.remoteParticipants.values()].some((p) => p.isAgent);
+      status(agentHere ? "agent joined, waiting for greeting…" : `in room ${room.name}, waiting for agent to join…`);
+      setTimeout(() => {
+        if (room && ![...room.remoteParticipants.values()].some((p) => p.isAgent))
+          status("no agent after 15 s: is `uv run agent.py` running? check its terminal", true);
+      }, 15000);
+    }
+  </script>
+</body>
+</html>

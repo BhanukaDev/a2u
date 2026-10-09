@@ -1,10 +1,10 @@
 # A2U — Product Requirements (v1)
 
-Status: draft v2 · 2026-10-09 · Owner: Bhanuka Dassanayake
+Status: draft v3 · 2026-10-10 · Owner: Bhanuka Dassanayake
 
 Related: [architecture.md](architecture.md) · [agent-config-spec.md](agent-config-spec.md) · [milestones.md](milestones.md) · [build-plan.md](build-plan.md) · [decisions.md](decisions.md) · [Blueprint diagrams](https://claude.ai/artifact/WA2RpmQpHjSRvR5DdTKyxN)
 
-Changes from v1 of this document are recorded as decisions D-012 to D-024.
+Changes from v1 of this document are recorded as decisions D-012 to D-024. The reliability harness (§6.15) was added in v3, D-025 to D-029.
 
 ---
 
@@ -12,11 +12,13 @@ Changes from v1 of this document are recorded as decisions D-012 to D-024.
 
 A2U is a platform for building AI agents that talk to customers over **web chat, web voice, phone calls and WhatsApp**. Each agent has one brain and one customer memory, whatever the channel. Developers describe an agent in config, connect their systems via webhooks, MCP or built-in connectors, and pay for usage.
 
+A2U is horizontal (D-001): the same platform serves customer support, sales, bookings, collections, triage and WhatsApp assistants in any industry. A bank card-support scenario was the first spike, not the target market.
+
 It competes with Retell AI and Vapi. The difference is what is built in, in order of how much it matters to a buyer:
 
 1. **Work that outlives the call.** Slow tools run as durable tasks owned by the conversation, not the call. The agent keeps talking, and the result is delivered on WhatsApp after the call ends if it has to be. Retell and Vapi are call-centric; this is the feature a buyer can picture and neither does cleanly.
 2. **One persona, one memory, across channels.** A single front agent talks; specialist workers do the work behind it. A customer who called yesterday and messages on WhatsApp today is the same customer with the same context. Channels work together inside one conversation: collect an email over WhatsApp during a call, or call back from chat with full context.
-3. **Deterministic where it matters.** Typed flows (`collect` → `confirm` → `call_tool` → `result`) for actions with consequences. The LLM understands and speaks; code decides, and for typed facts code also speaks.
+3. **Agents you can stand behind.** A built-in reliability harness (§6.15). Numbers, names and addresses are captured, checked and read back by code. Every sentence is checked before it is spoken, so the agent cannot invent a refund policy. Background watchers flag what rules miss, and flagged calls become tests. Typed flows (`collect` → `confirm` → `call_tool` → `result`) handle actions with consequences. The LLM understands and speaks; code decides, and for typed facts and commitments code also speaks.
 4. **Data controls on every tier**, without an enterprise contract: retention, no-recording mode, PII masking.
 5. **Built for South Asia first.** WhatsApp-heavy behaviour, local languages where quality allows, and agencies as first-class customers.
 
@@ -26,6 +28,8 @@ It competes with Retell AI and Vapi. The difference is what is built in, in orde
 - A developer can build, test and deploy a web chat + web voice agent **in under 1 hour**, and hear it on the phone within 5 minutes more using the shared test number.
 - Voice feels natural: **p50 ≤ 900 ms, p95 ≤ 1.5 s** from the end of user speech to the first agent audio, measured from Sri Lanka, on both web voice and phone.
 - Actions are safe: no tool with side effects runs without its flow's `confirm` or approval step having passed.
+- Words are safe: an agent never speaks a commitment (refund, waiver, amount, deadline) that did not come from a flow result or `must_say`. Every factual claim is grounded in that turn's evidence or replaced (D-027).
+- Captured entities are right: IDs, phone numbers and amounts are bound only after validation and a confirmed read-back (D-026).
 - Every agent change is versioned, diffable, tested by evals and reversible.
 - Three design partners run real traffic before public launch, and pay by invoice.
 - Gross margin on usage of **≥ 40%** at list price.
@@ -39,6 +43,7 @@ It competes with Retell AI and Vapi. The difference is what is built in, in orde
 - Multi-node clusters, dedicated cells, self-hosted control plane. v1 is a single-node k3s cluster on one EC2 instance plus RDS (D-015).
 - Public self-serve sign-up and card billing before there is pull for it (D-018).
 - Video, email channel, mobile SDKs.
+- Safety-critical uses: emergency response, crisis lines, medical triage and dispatch. These need a separate profile and tier (D-029).
 
 ## 3. Users
 
@@ -104,12 +109,13 @@ Priority: **P0** blocks the design-partner launch, **P1** should ship in v1, **P
 - **P0** A pending `NeedsInput` does not block the front agent from answering a side question from knowledge, then returning to the pending question.
 - **P0** Speaks or shows filler while a delegated task is pending. Filler is declared per worker (for example "I'm checking with your insurer now") and varied; it never repeats the same phrase twice in a row.
 - **P0** **Flow results are spoken by code.** A flow's `result.say` template is rendered and sent verbatim; the front agent is told what was said (D-017).
-- **P0** **Result check** for LLM worker results: `Result.must_say` and typed values (amounts, dates, times) must appear in the front agent's reply. On mismatch, regenerate once, then fall back to a template sentence.
+- **P0** **Claim check** on every front-agent sentence (§6.15, D-027). It replaces the result check: `must_say` and typed values from worker results must still appear correctly, and every information or commitment sentence must also be grounded. On text, regenerate once, then fall back to a template sentence. On voice, the sentence is replaced with the fallback.
 - **P1** Language detection and per-conversation language switching among the languages enabled for that channel.
 
 ### 6.3 Workers and flows
 - **P0** Worker kinds: `llm` (prompt, model, scoped tools), `flow` (capped steps), `tool` (single tool call).
 - **P0** Flow steps: `collect`, `choose`, `confirm`, `verify`, `call_tool`, `delegate`, `handoff`, `if`, `result`. No loops, no free-form expressions beyond the condition language (spec §5).
+- **P0** `collect` accepts entity types (`nic_lk`, `phone`, `person_name`, `address`, `money`, `date`, `email`, custom patterns) with spoken-form parsers, validators and read-back (spec §5.5, D-026).
 - **P0** `collect` has a retry cap and a timeout. `confirm` on "no" can return to a named `collect` step instead of ending the flow (spec §5.2).
 - **P0** Tool permissions are scoped per worker. The front agent has no side-effecting tools.
 - **P0** Workers return only the four contract types. Anything else is a `Failed`.
@@ -124,7 +130,7 @@ Priority: **P0** blocks the design-partner launch, **P1** should ship in v1, **P
 - **P0** Any worker or tool can be marked `background: true`. Delegation returns immediately; the conversation continues.
 - **P0** Tasks are durable (survive restarts and deploys), cancellable, with timeouts and idempotency keys for side effects. Live from M1 on web chat.
 - **P0** Delivery: speak or show at the next turn boundary if the conversation is live; otherwise WhatsApp, inside the user-initiated window or with an approved template. Requires a consent record (D-023). Configurable per agent.
-- **P0** The front agent sees task state in context and must not claim completion of a pending task (enforced by the result check).
+- **P0** The front agent sees task state in context and must not claim completion of a pending task (enforced by the claim check).
 - **P1** A task can return `NeedsInput` after the call ended; the question goes out on WhatsApp and the answer resumes the task.
 
 ### 6.6 Voice
@@ -132,7 +138,8 @@ Priority: **P0** blocks the design-partner launch, **P1** should ship in v1, **P
 - **P0** Choice of speech-to-text and text-to-speech providers and voices per agent and per language (v1 candidates: Deepgram, ElevenLabs, Cartesia, Google; final list after the M0 bake-off).
 - **P0** Web voice first (M2), phone second (M3). Same worker code.
 - **P0** Phone: DTMF input, transfer to a human number, call-length cap.
-- **P1** Speech-to-speech mode (OpenAI Realtime or Gemini Live) per agent, with the documented trade-off: no result check, fixed provider voices.
+- **P0** Idle handling: after silence the agent checks the caller is still there, then hangs up politely, so abandoned calls stop costing LiveKit and speech-to-text minutes (spec §10 `idle`).
+- **P1** Speech-to-speech mode (OpenAI Realtime or Gemini Live) per agent, with the documented trade-off: no claim check (so it cannot be used with restricted topics or on safety-relevant agents), fixed provider voices.
 - **P1** Call recording, opt-in per agent, with a spoken disclosure.
 
 ### 6.7 Channels
@@ -169,7 +176,7 @@ Priority: **P0** blocks the design-partner launch, **P1** should ship in v1, **P
 - **P1** One-click eval from a real conversation (PII masked), replayed against a new version.
 
 ### 6.12 Operate
-- **P0** Conversation list with transcripts, channel, outcome, cost and a per-turn latency waterfall (speech-to-text, routing, LLM, tools, result check, text-to-speech).
+- **P0** Conversation list with transcripts, channel, outcome, cost and a per-turn latency waterfall (speech-to-text, routing, LLM, tools, entity capture, claim check, text-to-speech), with each sentence's claim verdict.
 - **P0** Live monitor; human takeover for chat and WhatsApp; warm transfer for calls.
 - **P1** Generated agent diagram, clickable into the conversations that passed through each worker.
 - **P1** Analytics: volume, containment, outcomes per goal, latency percentiles, cost per conversation.
@@ -194,12 +201,39 @@ Priority: **P0** blocks the design-partner launch, **P1** should ship in v1, **P
 - **P0** Data deletion per customer on request (Sri Lanka PDPA); retention per workspace.
 - **P2** SOC 2 Type I readiness work starts after launch.
 
+### 6.15 Reliability harness
+
+Every agent runs inside four layers (D-025). Builders configure them in `policies` and `collect`; they never build them.
+
+**Capture (inline)**
+- **P0** Entity types with parsers for spoken forms in English, Sinhala and Tamil, including numbers said in chunks and local number words (D-026).
+- **P0** The validator runs before any tool call. A format failure re-asks without using up an attempt, and the agent tells the caller which part is missing.
+- **P0** Read-back is rendered by code (`digits`, `spell`, `summary`) and must be confirmed before the value is bound. The model's say-so is not enough.
+- **P1** Address checks against a geocoder; name spelling across scripts.
+
+**Guard (inline, deterministic, ≤ 50 ms p95 per sentence)**
+- **P0** The claim check classes each sentence as conversation, information or commitment, and grounds information and commitments in this turn's evidence (architecture §4.5).
+- **P0** Restricted topics answer only from approved sources, otherwise hand off. Never-say rules are written per agent.
+- **P0** The agent never claims a pending task is complete, and never confirms something the caller did not confirm.
+- **P0** `turn_claims` audit trail: every checked sentence with its evidence and verdict, viewable per conversation and exportable.
+
+**Watch (asynchronous, never blocks a turn)**
+- **P0** A watcher runtime with `rules`, `classifier` and `llm_judge` kinds, and actions `steer`, `escalate` and `flag`. Built-in watchers: unsupported commitment, repeated misunderstanding, frustration.
+- **P0** A review queue in the console for flagged conversations.
+- **P1** `remediate`: a correction message drafted after the conversation and sent only with operator approval and consent.
+- **P1** Custom watchers per agent.
+
+**Prove (offline)**
+- **P0** Eval assertions on claims and captures (`no_unsupported_claims`, `captured`, `not_said`).
+- **P1** One click from a flagged conversation to an eval case (with §6.11).
+
 ## 7. Non-functional requirements
 
 | Area | Target |
 |---|---|
 | Voice latency | p50 ≤ 900 ms, p95 ≤ 1.5 s end of speech → first audio, measured from Sri Lanka, web voice and phone |
 | Chat latency | First token ≤ 1.5 s p95 |
+| Guard latency | Claim check and inline guards ≤ 50 ms p95 per sentence, on top of the sentence buffer |
 | Availability | 99.9% monthly for the data plane (calls and messages); 99.5% for the console |
 | Durability | No accepted message or task lost across a pod or node failure |
 | Scale at launch | 100 concurrent calls, 1,000 concurrent chat sessions on the single k3s node; scale by resizing the instance, then adding a voice node |
@@ -224,6 +258,8 @@ Priority: **P0** blocks the design-partner launch, **P1** should ship in v1, **P
 | Time to first phone call via shared test number | < 5 min after the agent exists |
 | Voice latency p50 from Sri Lanka | ≤ 900 ms at M2 (web) and M3 (phone) |
 | Conversations ending without human handoff (containment) | ≥ 70% on template agents |
+| Entity capture accuracy (NIC, phone, amount) after read-back | ≥ 99% on the WP-0.1 entity corpus, per enabled language |
+| Unsupported commitments spoken | 0 in eval suites; < 1 in 1,000 conversations as flagged by watchers |
 | Gross margin on usage | ≥ 40% |
 | Paying orgs, 90 days after launch | 15 |
 
@@ -240,6 +276,9 @@ Priority: **P0** blocks the design-partner launch, **P1** should ship in v1, **P
 | Funded competitors cut prices | Margin squeeze | Compete on built-in features (§1), not price |
 | Scope for one engineer | Slow to revenue | D-013, D-015, D-018, D-022 cut channels, infra, billing and campaigns; sizes re-estimated after M0 and M1 |
 | Single node | An instance failure takes everything down | RDS for data; node rebuild scripted and drilled in M5; second node when revenue justifies it |
+| Agent makes an unsupported promise (*Moffatt v. Air Canada*) | Tenant is liable; we lose the tenant | Claim check on every sentence (D-027), restricted topics, audit trail, watchers |
+| Claim check too slow or too strict | Calls feel slow, or the agent becomes evasive | Rules and small classifiers only inline (D-028); measured in WP-0.9; false-positive rate tracked per agent |
+| Entity parsing wrong in Sinhala/Tamil | Wrong customer verified or a wrong action taken | Parser + validator + confirmed read-back (D-026); corpus in WP-0.1 |
 | Toll fraud and abuse | Direct cost | Outbound gating and rate limits from M3; strangers only get access in M5b with its controls |
 
 ## 11. Open questions
@@ -249,3 +288,5 @@ Priority: **P0** blocks the design-partner launch, **P1** should ship in v1, **P
 3. Human takeover for phone: warm transfer only, or barge-in to listen?
 4. Which local Sri Lankan carrier offers a SIP trunk we can point LiveKit SIP at, and at what cost per number.
 5. Whether to meter LiveKit minutes separately or fold them into the voice minute price.
+6. Will regulated tenants (banks, health) allow an asynchronous LLM judge to read live transcripts, and does it have to run in-region? This decides where watchers run.
+7. When to open the safety-critical tier (D-029), and what certification or partner it needs.

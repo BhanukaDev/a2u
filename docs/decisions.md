@@ -100,7 +100,7 @@ The decisions below come from the first review of the v1 docs. The theme: keep t
 **Why:** phone numbers and WhatsApp business verification are slow external dependencies. Web chat and browser voice have none, so design partners can use the product from M1 and hear it from M2.
 
 ### D-017 · Flows speak typed results deterministically
-**Status:** accepted · 2026-10-09
+**Status:** accepted · 2026-10-09 · amended by D-027
 **Decision:** a flow's final `result` carries a `say` template rendered by code and sent or spoken verbatim. The front agent is told what was said and continues from there. LLM workers return `Result.must_say` instead, and the result check applies to the front agent's paraphrase of those.
 **Why:** on voice the result check must buffer the whole sentence before text-to-speech, and a regenerate costs a full round trip of silence. For flows the values are already typed, so code can speak them. "Code decides" becomes "code decides and code speaks the facts."
 **Consequences:** the result check runs only after LLM worker results, which is the rarer path. Flow authors write one sentence per result.
@@ -143,3 +143,53 @@ The decisions below come from the first review of the v1 docs. The theme: keep t
 **Decision:** phone calls enter and leave through LiveKit SIP. The first SIP trunk is Twilio Elastic SIP Trunking, which gives outbound calling to Sri Lanka and inbound numbers in the countries Twilio serves. A local Sri Lankan carrier trunk is added when the M0 check finds one that works, so tenants can have local numbers.
 **Why:** one SIP integration point regardless of carrier. Twilio is the fastest way to a working phone channel; it is not the long-term source of Sri Lankan numbers.
 **Consequences:** the shared test number (PRD §6.7) is a Twilio number. Per-tenant local numbers depend on the carrier spike.
+
+---
+
+## Harness round, 2026-10-10
+
+The decisions below come from the first voice spike (WP-0.3). The spike showed that wiring speech-to-text, an LLM and text-to-speech together takes hours, so it is not where A2U's value is. The value is a reusable harness that makes agents for any company and any use case (support, sales, emergency triage, WhatsApp assistants) say and do what was expected. In the spike, a Sinhala NIC said in chunks ("දෙදහස් දෙකයි, එකසිය හැත්තෑ හතයි") was read back with a digit missing, and the agent claimed it had confirmed numbers the caller never confirmed. Both were fixed by code, not by prompting.
+
+### D-025 · A2U is a reliability harness: Capture, Guard, Watch, Prove
+**Status:** accepted · 2026-10-10
+**Decision:** every agent runs inside four built-in layers. Builders configure them; they do not build them.
+- **Capture** (inline): typed entities (IDs, phone numbers, names, addresses, amounts, dates) with locale-aware parsers, validators and read-back policies (D-026).
+- **Guard** (inline, deterministic, fast): checks before a tool call and before speech. It can block, replace or regenerate (D-027, D-028).
+- **Watch** (asynchronous): classifiers and LLM judges that score the conversation as it happens, never on the hot path. They steer the next turn, escalate or flag (D-028).
+- **Prove** (offline): evals on every version. Flagged conversations become eval candidates, so the suite grows from real failures.
+**Why:** buyers compare platforms on correctness, not on whether the voice pipeline exists. A horizontal platform (D-001) can only promise "an agent for any company in days" if correctness is built in rather than rebuilt per agent.
+**Consequences:** PRD §6.15, architecture §4.5–4.7, spec §5.5, §10 and §11. Every layer emits spans and records, so a tenant can show what the agent said and why.
+
+### D-026 · Entities are captured by code, not by the LLM's reading of a transcript
+**Status:** accepted · 2026-10-10
+**Decision:** `collect` takes entity types (`nic_lk`, `phone`, `person_name`, `address`, `money`, `date`, `email`, and others) as well as plain types. Each type has a parser for spoken forms per language (chunked numbers such as "two thousand two, one seventy seven"; Sinhala and Tamil number words), a validator (length, format, check digit where one exists), a normaliser, and a read-back policy (`digits`, `spell`, `summary`, `none`). A value is bound only after the read-back has been confirmed. A value that fails format validation sends the agent back to the caller without using up a verification attempt.
+**Considered:** leaving extraction to the LLM with prompt instructions. The spike showed this drops digits on chunked numbers, and models also claim a confirmation that never happened.
+**Why:** a wrong ID, number or address is the most common and most visible failure of voice agents, and it is the one where local-language handling is an edge over US-built platforms.
+**Consequences:** the LLM still proposes a value from the transcript; code validates it, renders the read-back (`digits_spoken` and the other filters) and binds it. Entity parsers need test corpora per language, recorded alongside the WP-0.1 speech bake-off.
+
+### D-027 · What the agent says is an action: claims are classed and grounded
+**Status:** accepted · 2026-10-10 · amends D-017
+**Decision:** every sentence the front agent produces falls into one of three classes:
+- **Conversation** (greetings, empathy, questions, filler) is free-form.
+- **Information** (policy, prices, hours, eligibility, account facts) must be supported by evidence given in that turn: a tool result, a flow result, `must_say`, or a retrieved knowledge chunk.
+- **Commitment** (refunds, waivers, compensation, deadlines, amounts owed, "I have done X") may only be spoken from a flow's `result.say` or a worker's `must_say`. The front agent never phrases a commitment on its own.
+The **claim check** replaces the result check and runs on every front-agent sentence, not only after LLM worker results. An unsupported sentence is regenerated once on text channels, or replaced by a fallback sentence ("Let me confirm that for you") on voice, and the event is recorded. Tenants can also mark **restricted topics** (answers only from approved sources, otherwise hand off) and write **never-say** rules.
+**Why:** in *Moffatt v. Air Canada* (BC Civil Resolution Tribunal, 2024), a chatbot invented a bereavement refund policy. The airline was held liable for what the bot said, and the correct policy being on its website was no defence. The tenant owns every sentence, so the harness has to make unsupported sentences impossible or visible.
+**Consequences:** D-017's note that "the result check runs only after LLM worker results" no longer holds. The claim check is on the hot path for every sentence, so it must meet the inline guard budget in D-028. A spike (WP-0.9) measures its latency and accuracy before M1 builds it. Each checked sentence is stored with its class, evidence and verdict (`turn_claims`), which gives tenants an audit trail.
+
+### D-028 · Guards run inline and are deterministic; watchers run asynchronously and act on the next turn
+**Status:** accepted · 2026-10-10
+**Decision:** inline guards (format validation, confirmation gates, tool permissions, the claim check, PII before speech) are code, rules or small classifiers with a budget of **≤ 50 ms p95 per sentence**. An LLM judge is never on the hot path. Watchers (LLM judges, sentiment, policy compliance, trajectory scoring, custom classifiers) run asynchronously on the transcript and tool trace and can act only from the next turn onward:
+- `steer`: add a note to the front agent's context for the next turn.
+- `escalate`: offer or perform a handoff to a human.
+- `flag`: mark the conversation for review and make it an eval candidate.
+- `remediate`: draft a correction message after the conversation. It is sent only with operator approval and a consent record (D-023).
+**Considered:** an LLM judge on every reply before it is spoken. That adds hundreds of milliseconds per sentence on voice and breaks the latency goal.
+**Why:** a background monitor cannot stop a mistake that has already been spoken. Only inline code can. Watchers find what rules miss and feed the eval suite.
+**Consequences:** a watcher's finding never changes a turn that has already been sent. Builders choose for each risk whether it is a guard (blocks) or a watcher (detects). Watchers use the same model providers as workers and are metered as usage.
+
+### D-029 · Safety-critical uses are a separate tier, not v1
+**Status:** accepted · 2026-10-10
+**Decision:** A2U is horizontal, but emergency response and other safety-critical uses (medical triage, crisis lines, dispatch) are not sold in v1. When offered, they need a safety-critical profile: a human dispatcher can always join or take over, no free-form advice (only restricted topics answered from approved protocols), provider failover for speech and LLM, and stricter latency and availability targets.
+**Why:** a stalled call, a misheard address or a wrong triage can cost a life, not a refund. The single-node v1 deployment (D-015) cannot meet the availability such uses need.
+**Consequences:** PRD non-goals list it. The Capture and Guard layers are designed so the safety-critical profile is stricter configuration, not a different product.
