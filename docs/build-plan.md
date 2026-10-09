@@ -27,10 +27,11 @@ Dependencies are listed where they are not obvious. Within a milestone, WPs are 
 **Build:** a script run from Colombo and from candidate regions measuring round trips to LiveKit Cloud regions, speech vendors, and LLM time to first token for Haiku 5.5 and a fast Gemini model.
 **Done when:** `docs/spikes/region.md` names the region and LLM, with numbers.
 
-### [ ] WP-0.3 LiveKit Agents proof
+### [x] WP-0.3 LiveKit Agents proof
 **Goal:** a latency floor before any A2U code exists.
 **Build:** a throwaway LiveKit Agents worker: Deepgram → echo-style LLM → Cartesia; a plain HTML page using the LiveKit JS SDK; then a Twilio SIP trunk → LiveKit SIP inbound call to the same worker. Measure end of speech → first audio from Sri Lanka on both.
 **Done when:** `docs/spikes/livekit.md` records both latencies, barge-in behaviour, and confirms or revises D-012 and D-024.
+**Note (2026-10-10):** closed on a qualitative pass: web voice with tools works in English and Sinhala, which confirms D-012. The labelled Colombo p50/p95 and the barge-in count move to WP-0.2 and WP-2.8, and the SIP path to WP-3.1 (D-030).
 
 ### [ ] WP-0.4 Durability spike
 **Goal:** confirm DBOS and the event fan-out mechanism.

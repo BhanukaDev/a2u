@@ -193,3 +193,17 @@ The **claim check** replaces the result check and runs on every front-agent sent
 **Decision:** A2U is horizontal, but emergency response and other safety-critical uses (medical triage, crisis lines, dispatch) are not sold in v1. When offered, they need a safety-critical profile: a human dispatcher can always join or take over, no free-form advice (only restricted topics answered from approved protocols), provider failover for speech and LLM, and stricter latency and availability targets.
 **Why:** a stalled call, a misheard address or a wrong triage can cost a life, not a refund. The single-node v1 deployment (D-015) cannot meet the availability such uses need.
 **Consequences:** PRD non-goals list it. The Capture and Guard layers are designed so the safety-critical profile is stricter configuration, not a different product.
+
+## Build-order round, 2026-10-10
+
+### D-030 · M1 starts now; the remaining M0 spikes run alongside and gate only the work that needs them
+**Status:** accepted · 2026-10-10 · amends the M0-before-M1 order in milestones.md
+**Decision:** WP-0.3 is closed and M1 (brain + web chat) starts. Each remaining spike must finish before the first WP that depends on it, not before M1:
+- WP-0.9 claim check → before WP-1.21 (and before WP-1.7 locks its sentence-buffer hook).
+- WP-0.4 durability → before WP-1.11.
+- WP-0.5 k3s → before WP-1.18.
+- WP-0.1 speech bake-off and WP-0.2 region and LLM → before M2.
+- WP-0.6 telephony numbers → before M3; WhatsApp application → before M4.
+- WP-0.7 payments → before M5b.
+**Why:** one engineer. The web-chat brain does not depend on speech vendors, region, numbers, WhatsApp or payments, and the LiveKit spike already showed the voice plumbing works. Waiting for every spike delays the first design partner for no gain. The claim check stays first among the M1 harness pieces because D-027 and D-028 depend on its result.
+**Consequences:** the WP-0.3 latency and barge-in numbers are collected in WP-0.2 and WP-2.8, and the SIP path in WP-3.1. WP-0.8's re-estimate happens at the end of M1 instead of the end of M0. The WhatsApp application is filed late, which risks the M4 schedule because Meta verification takes weeks.

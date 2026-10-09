@@ -22,6 +22,8 @@ Total to M5: roughly 25–32 weeks. M1 grew by about a week when the reliability
 
 Spikes, each ending in a short written result in `docs/spikes/`. Several run in parallel because they are mostly waiting on vendors.
 
+Since D-030, M1 starts without waiting for all of M0. Each spike gates only the first WP that depends on it. The LiveKit proof is closed.
+
 - **Speech bake-off.** 50 real utterances each in English (Sri Lankan accent), Sinhala, Tamil and code-mixed speech. Score speech-to-text word error rate and text-to-speech naturalness for Deepgram, Google, ElevenLabs, Cartesia and Gemini Live. **Gate:** which languages launch on voice (D-019). It also records an entity corpus of NICs, phone numbers and amounts said naturally (in chunks, with local number words) to test entity parsers (D-026).
 - **Claim check latency.** Can a sentence be classed and grounded in ≤ 50 ms p95 with rules plus a small classifier, and with what precision and recall on invented commitments (D-027, D-028)?
 - **Region, LLM endpoint and LiveKit.** Round-trip times from Colombo to Mumbai and Singapore, from each to LiveKit Cloud's nearest region, to the speech vendors, and LLM time to first token for Haiku 5.5 and a fast Gemini model from each region. Pick the EC2 region and the default voice LLM.

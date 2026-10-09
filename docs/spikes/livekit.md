@@ -1,6 +1,6 @@
 # WP-0.3 · LiveKit voice spike: interim findings
 
-Status: in progress · 2026-10-10. The latency measurements and barge-in counts that close WP-0.3 are still to do (see `spikes/livekit-voice/README.md`). This file records what the spike has taught so far, because it changed the plan (D-025 to D-029).
+Status: closed · 2026-10-10. The spike passed: a multilingual web voice agent with tools works end to end on LiveKit Cloud, which confirms D-012. The labelled latency runs from Colombo and the barge-in counts were not done here. They move to WP-0.2 (region and LLM) and WP-2.8 (M2 exit measurement), and the Twilio SIP path to WP-3.1, which keeps D-024 open until then (D-030).
 
 ## Setup tested
 
@@ -15,6 +15,6 @@ Browser → LiveKit Cloud → Deepgram nova-3 or Gemini transcribe → Gemini 3.
 5. **An open call costs money while silent.** LiveKit minutes and streaming speech-to-text are billed for silence; the LLM and TTS are not. A forgotten tab keeps billing. The product needs idle check-in and hang-up plus a call-length cap (spec §10 `idle`, PRD §6.6).
 6. **Transcript logging is needed to tell speech-to-text errors from LLM errors.** The spike now logs `user_text` next to each agent reply in `runs/latency.jsonl`.
 
-## Still to measure
+## Not measured here (moved, see D-030)
 
 End-of-speech → first-audio p50/p95 from Sri Lanka (laptop worker and regional worker), echo vs. LLM, Aura-2 vs. Cartesia, barge-in over about 20 interruptions, and the Twilio SIP → LiveKit SIP path. Then confirm or revise D-012 and D-024 here.
