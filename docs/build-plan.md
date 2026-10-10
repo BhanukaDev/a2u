@@ -81,10 +81,11 @@ Dependencies are listed where they are not obvious. Within a milestone, WPs are 
 **Done when:** every example in the spec loads; a corpus of invalid configs produces the expected errors.
 **Note (2026-10-10):** built against spec v0.3 (the current one). `packages/a2u-core/src/a2u_core/config`; spec gaps filled by D-031 and written up as spec §12. A test checks that every YAML example in the spec appears verbatim in a fixture that loads. Condition parsing is left to WP-1.5.
 
-### [ ] WP-1.4 Worker contract and runtime
+### [x] WP-1.4 Worker contract and runtime
 **Reads:** architecture §4.2.
 **Build:** `Result`, `NeedsInput`, `Progress`, `Failed`; `llm` and `tool` worker kinds on Pydantic AI; scoped tool permission checks; anything else returned becomes `Failed`.
 **Done when:** unit tests cover each contract type and permission denial.
+**Note (2026-10-10):** `packages/a2u-core/src/a2u_core/workers`. Gaps filled by D-032. Tool execution is behind a `ToolBackend` protocol that WP-1.10 implements; `FakeToolBackend` stands in for tests. LLM worker knowledge waits for WP-1.9; DBOS durability for WP-1.11.
 
 ### [ ] WP-1.5 Flow engine
 **Reads:** spec §5.2–5.4, architecture §4.4.

@@ -102,8 +102,13 @@ class Progress(BaseModel):
 
 class Failed(BaseModel):
     reason: str               # internal, goes to traces
-    user_safe_message: str
+    user_safe_message: str    # defaults to a platform apology
 ```
+
+- A worker ends with `Result`, `NeedsInput` or `Failed`. `Progress` is reported while it runs, not returned. Anything else, including an exception, a timeout or a denied tool call, becomes `Failed` (D-032).
+- LLM workers end through three output tools, `finish`, `ask_user` and `give_up`; they have no text output and cannot set `say`.
+- Every tool call is checked when it is made against the worker's scope: listed, existing, MCP-allowlisted, and for side effects, after `confirm` and through any approval policy. A tool error fails the worker.
+- Code: `a2u_core.workers` (`contract`, `tools`, `runtime`). Flow workers run in the flow engine (§4.4) and use the same scoped tool calls.
 
 ### 4.3 Task lifecycle
 

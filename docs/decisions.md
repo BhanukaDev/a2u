@@ -222,3 +222,18 @@ The **claim check** replaces the result check and runs on every front-agent sent
 - Smaller fills: a webhook trigger's `action` is `call` or `whatsapp`; `knowledge.refresh` is `daily`, `weekly` or `monthly`; `max_call_minutes` defaults to 20; `recording_disclosure` defaults to `true`; voice vendors left out mean the platform default.
 **Why:** YAML 1.1 reads `on` as `true`, which breaks the spec's own examples. The remaining rules close gaps that would otherwise be decided by accident in code; the side-effect default is the safe one under "code decides".
 **Consequences:** the console editor and the CLI give the same line-referenced errors. Configs written with YAML 1.1 habits (`enabled: yes`) get a type error rather than a silent boolean. Condition expressions (`if:`, `approval`) are parsed by the flow engine in WP-1.5, not by the loader.
+
+## Worker round, 2026-10-10
+
+### D-032 · How workers end, and how tool permissions are checked at run time
+**Status:** accepted · 2026-10-10
+**Decision:** the worker runtime (WP-1.4, `a2u_core.workers`) follows these rules:
+- **A worker ends with `Result`, `NeedsInput` or `Failed`.** `Progress` is reported while it runs (`WorkerContext.progress`), not returned. Any other return value, any exception, a timeout or a denied tool call becomes `Failed` with a `reason` for traces and a default `user_safe_message`.
+- **LLM workers have no text output.** Their only outputs are `finish` (`data`, optional `must_say`), `ask_user` (becomes `NeedsInput`) and `give_up` (becomes `Failed`). A text reply is retried, then fails the worker. They cannot set `say`, which stays with flows (D-017).
+- **Every tool call is checked when it is made,** not only when tools are offered: the tool must be in the worker's scope, exist, and be an allowlisted MCP operation. A side-effecting call needs `confirm` earlier in the flow. A tool under an approval policy is denied, even after `confirm`, until the flow engine evaluates the condition (WP-1.5) and approvals can pause a task (WP-5.1).
+- **Connector and MCP operations count as side-effecting at run time** until the connector catalog (WP-1.10) declares their effects. `ToolScope` takes the declared effects as a function.
+- **A failed tool call fails the worker.** The model is not asked to work around it; retries belong to the webhook client (WP-1.10).
+- **Idempotency keys are `task_id:step`.** A tool worker's step is its name. An LLM worker's step is `worker:n`, counting this task's tool calls, including those made before a `NeedsInput` resume.
+- `NeedsInput.schema` is stored as `input_schema` in Python (`schema` shadows a Pydantic method) and serialised as `schema`.
+**Why:** "code decides" needs a check at the moment of the call, because what was offered to the model is not a guarantee. Unknown effects and unbuilt approvals are denied because that is the safe default. Failing on tool errors keeps a worker from inventing an answer around a missing fact.
+**Consequences:** LLM workers that list MCP or connector tools can call them only after WP-1.10 declares them read-only. Tools under an approval policy are unusable until WP-1.5 and WP-5.1. The flow engine reuses `ScopedTools` with `confirmed=True` after a `confirm` step, and `FakeToolBackend` for its tests. Knowledge for LLM workers is wired in WP-1.9.

@@ -5,6 +5,7 @@ description = "A2U brain: front agent, router, flows, worker contract, memory, r
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.11",
+    "pydantic-ai-slim[anthropic]>=1.0",
     "pyyaml>=6.0",
 ]
 
