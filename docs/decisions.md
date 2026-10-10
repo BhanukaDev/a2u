@@ -207,3 +207,18 @@ The **claim check** replaces the result check and runs on every front-agent sent
 - WP-0.7 payments → before M5b.
 **Why:** one engineer. The web-chat brain does not depend on speech vendors, region, numbers, WhatsApp or payments, and the LiveKit spike already showed the voice plumbing works. Waiting for every spike delays the first design partner for no gain. The claim check stays first among the M1 harness pieces because D-027 and D-028 depend on its result.
 **Consequences:** the WP-0.3 latency and barge-in numbers are collected in WP-0.2 and WP-2.8, and the SIP path in WP-3.1. WP-0.8's re-estimate happens at the end of M1 instead of the end of M0. The WhatsApp application is filed late, which risks the M4 schedule because Meta verification takes weeks.
+
+## Config round, 2026-10-10
+
+### D-031 · How agent config is parsed and what validation fills in where the spec was silent
+**Status:** accepted · 2026-10-10
+**Decision:** the config loader (WP-1.3) follows these rules, now written into spec §12:
+- **YAML 1.2 scalars.** Plain scalars are resolved with the YAML 1.2 core schema, not PyYAML's YAML 1.1 rules, so `claim_check: on`, `filler: off` and `confirm` answers such as `no` stay strings. Only `true`/`false` are booleans. Explicit tags, merge keys (`<<`) and duplicate keys are errors. Input is capped at 1 MB and 50,000 values after alias expansion.
+- **Unknown keys are errors.** Every object rejects fields the spec does not define, so a typo cannot silently disable a setting.
+- **`instructions` is a document name when it looks like one** (`[a-z][a-z0-9_-]*`, such as `products`); anything else is inline text. `persona` is always a document name.
+- **Delegated flows read their arguments as `${args.x}`.** Flows can read `args`, `customer` and their own bindings; nothing else. Webhook triggers read `event`; evals read `result` and `customer`.
+- **Webhook tools have side effects unless they say `side_effects: false`.** A side-effecting tool needs an earlier `confirm` on every path through a flow, or an approval policy; LLM and tool workers need an approval policy. Connector and MCP operations are not checked until the connector catalog (WP-1.10) declares their effects.
+- **`speech_to_speech` cannot be combined with `restricted_topics` or `never_say`**, because no sentence exists to check (PRD §6.9).
+- Smaller fills: a webhook trigger's `action` is `call` or `whatsapp`; `knowledge.refresh` is `daily`, `weekly` or `monthly`; `max_call_minutes` defaults to 20; `recording_disclosure` defaults to `true`; voice vendors left out mean the platform default.
+**Why:** YAML 1.1 reads `on` as `true`, which breaks the spec's own examples. The remaining rules close gaps that would otherwise be decided by accident in code; the side-effect default is the safe one under "code decides".
+**Consequences:** the console editor and the CLI give the same line-referenced errors. Configs written with YAML 1.1 habits (`enabled: yes`) get a type error rather than a silent boolean. Condition expressions (`if:`, `approval`) are parsed by the flow engine in WP-1.5, not by the loader.

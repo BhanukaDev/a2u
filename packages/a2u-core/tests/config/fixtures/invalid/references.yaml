@@ -1,0 +1,28 @@
+agent: bad
+front:
+  persona: front_desk
+  knowledge: [faq, prices]  # error: front.knowledge[1] | unknown knowledge base 'prices'
+channels:
+  web: { chat: true }
+workers:
+  products:
+    kind: llm
+    instructions: Answer product questions.
+    tools: [search, crm.lookup_patient, crm.delete_patient, faq_tool.op]  # error: workers.products.tools[0] | unknown tool 'search' ; error: workers.products.tools[2] | 'delete_patient' is not in crm.allow ; error: workers.products.tools[3] | webhook tool 'faq_tool' has no operations
+  checker:
+    kind: tool
+    tool: insurer  # error: workers.checker.tool | unknown tool 'insurer'
+router:
+  fallback: billing  # error: router.fallback | unknown worker 'billing'
+  examples:
+    - { text: "refund please", worker: refunds }  # error: router.examples[0].worker | unknown worker 'refunds'
+tools:
+  crm: { type: mcp, server: "https://mcp.example.com", allow: [lookup_patient] }
+  faq_tool: { type: webhook, url: "https://faq.example.com", side_effects: false }
+knowledge:
+  faq: { sources: [docs/faq.pdf] }
+policies:
+  approval: { refund: "amount > 10" }  # error: policies.approval.refund | unknown tool 'refund'
+  speech:
+    restricted_topics:
+      refunds: { sources: [refund_policy] }  # error: policies.speech.restricted_topics.refunds.sources[0] | unknown knowledge base 'refund_policy'

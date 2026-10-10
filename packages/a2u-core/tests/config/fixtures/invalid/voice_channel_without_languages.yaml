@@ -1,0 +1,7 @@
+agent: bad
+languages: { default: en, text: [en] }  # error: languages.voice | but languages.voice is empty
+front:  # error: front.voice | but front.voice is not configured
+  instructions: Hi.
+channels:
+  web: { chat: true, voice: true }
+  phone: { numbers: ["+94 11 234 5678"] }

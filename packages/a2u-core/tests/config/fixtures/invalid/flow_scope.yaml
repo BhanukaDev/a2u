@@ -1,0 +1,26 @@
+agent: bad
+front:
+  instructions: Hi.
+channels:
+  web: { chat: true }
+workers:
+  bookings:
+    kind: flow
+    steps:
+      - confirm: { text: "Move to ${slot}?", on_no: slot }  # error: workers.bookings.steps[0].confirm.text | '${slot}' is not bound here ; error: workers.bookings.steps[0].confirm.on_no | on_no must name an earlier collect step
+      - collect: { slot: date }
+      - collect: { slot: time }  # error: workers.bookings.steps[2].collect.slot | 'slot' is already bound
+      - collect: { day: "choose(calendar.days, doctor=doctor.id)" }  # error: workers.bookings.steps[3].collect.day | 'doctor.id' is not bound here
+      - result: { say: "Booked for ${slot | weekday}." }  # error: workers.bookings.steps[4].result.say | unknown filter 'weekday'
+      - handoff: human  # error: workers.bookings.steps[5] | unreachable
+  deep:
+    kind: flow
+    steps:
+      - if: "true"
+        then:
+          - if: "true"
+            then:
+              - if: "true"  # error: workers.deep.steps[0].then[0].then[0] | nesting depth
+                then: [ { handoff: human } ]
+tools:
+  calendar: { type: connector, connector: google_calendar, connection: gcal }

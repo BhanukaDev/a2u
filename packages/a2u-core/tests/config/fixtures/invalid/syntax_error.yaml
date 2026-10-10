@@ -1,0 +1,4 @@
+agent: bad
+front:
+  instructions: Hi.
+ channels: { web: { chat: true } }  # error: <root> | expected <block end>

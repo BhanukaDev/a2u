@@ -1,0 +1,10 @@
+agent: bad
+languages: { default: en, voice: [en], text: [] }  # error: languages.text | but languages.text is empty
+front:
+  instructions: Hi.
+  voice: { voices: { en: { voice_id: maya } } }
+  profiles:
+    phone: { max_reply_chars: 200 }  # error: front.profiles.phone | channel 'phone' is not configured
+channels:
+  web: { chat: true, voice: true }
+  whatsapp: { account: bad }

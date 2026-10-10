@@ -75,10 +75,11 @@ Dependencies are listed where they are not obvious. Within a milestone, WPs are 
 **Build:** Alembic migrations for all core tables; `tenant_id` required by every repository method; row-level security policies; an isolation test suite that attempts cross-tenant reads for every table.
 **Done when:** the isolation suite passes with zero leaks and fails if a policy is removed.
 
-### [ ] WP-1.3 Config loader and validator
+### [x] WP-1.3 Config loader and validator
 **Reads:** agent-config-spec.md (all).
-**Build:** Pydantic models for spec v0.2; YAML/JSON load; validation with line-referenced errors; language-per-channel checks; document references resolved by name.
+**Build:** Pydantic models for spec v0.3; YAML/JSON load; validation with line-referenced errors; language-per-channel checks; document references resolved by name.
 **Done when:** every example in the spec loads; a corpus of invalid configs produces the expected errors.
+**Note (2026-10-10):** built against spec v0.3 (the current one). `packages/a2u-core/src/a2u_core/config`; spec gaps filled by D-031 and written up as spec §12. A test checks that every YAML example in the spec appears verbatim in a fixture that loads. Condition parsing is left to WP-1.5.
 
 ### [ ] WP-1.4 Worker contract and runtime
 **Reads:** architecture §4.2.

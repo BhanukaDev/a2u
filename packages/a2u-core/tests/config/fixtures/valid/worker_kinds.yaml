@@ -1,0 +1,56 @@
+# The three worker kinds from spec §5.1, with the flow's steps filled in.
+agent: shop-assistant
+languages: { default: en, text: [en] }
+front:
+  instructions: You are the shop's assistant. Keep answers short.
+  filler: ["One moment."]
+channels:
+  web: { chat: true }
+
+workers:
+  products:                      # kind: llm
+    kind: llm
+    description: Product questions, availability, specs   # used by routing
+    instructions: products       # persona/instruction document name, or inline text
+    model: anthropic:claude-sonnet-5-5
+    tools: [search_catalog]
+    knowledge: [catalog]
+    filler: ["Let me look that up in the catalogue.", "One moment, checking stock."]
+
+  insurance:                     # kind: tool
+    kind: tool
+    tool: insurer_check
+    background: true
+    timeout: 10m
+    filler: ["I'm checking with your insurer now, this can take a minute."]
+
+  bookings:                      # kind: flow
+    kind: flow
+    description: Book, move or cancel appointments
+    filler: ["Just a second while I check the calendar."]
+    steps:
+      - collect: { day: date }
+      - result: { say: "Noted for ${day | date_spoken}." }
+
+  returns:
+    kind: llm
+    description: Return questions
+    instructions: Answer questions about returns using the catalogue. Never promise a refund.
+    filler: off
+
+tools:
+  search_catalog:
+    type: webhook
+    url: https://shop.example.lk/a2u/search
+    input: { query: string }
+    output: { items: array }
+    side_effects: false
+  insurer_check:
+    type: webhook
+    url: https://shop.example.lk/a2u/insurance
+    input: { policy_no: string }
+    output: { covered: bool }
+    side_effects: false
+
+knowledge:
+  catalog: { sources: ["https://shop.example.lk/catalog"], refresh: daily }

@@ -4,7 +4,7 @@ Status: draft · 2026-10-10. This is the surface customers build with. Code agen
 
 The cap on expressiveness is deliberate (see [decisions.md](decisions.md), D-006). Requests for loops or general-purpose logic are answered with webhooks or code agents, not new constructs.
 
-Changes in v0.3: entity types for `collect` with read-back (§5.5, D-026); `policies.speech` for claim classes, restricted topics and never-say rules (D-027); `policies.watch` (D-028); `policies.idle`; eval assertions on claims.
+Changes in v0.3: entity types for `collect` with read-back (§5.5, D-026); `policies.speech` for claim classes, restricted topics and never-say rules (D-027); `policies.watch` (D-028); `policies.idle`; eval assertions on claims; validation rules (§12, D-031).
 
 Changes from v0: no `sms` channel (D-013); languages per channel (D-019); `result.say` (D-017); `confirm.on_no`, `collect.retries`/`timeout`; filler per worker; consent in delivery; `schedule` triggers moved to "after v1" (D-022); current model IDs.
 
@@ -317,3 +317,23 @@ evals:
 Evals can also be created from a real conversation in the console ("turn into eval"); the generated YAML lands here with PII masked. Conversations flagged by a watcher are offered as eval candidates (Prove, D-025).
 
 Other claim assertions: `not_said: "refund"`, `claim_class: { contains: commitment, from: result.say }`, `watch_flagged: { watcher: unsupported_commitment, expect: false }`.
+
+## 12. Validation
+
+`a2u_core.config` loads YAML or JSON and reports every error with a path and a line, for example `agent.yaml:14:9: workers.bookings.steps[3].confirm.on_no: on_no must name an earlier collect step, not 'slot'`. The console, the control API and the CLI all use it. Parsing rules and the gaps filled here are recorded in D-031.
+
+**Parsing.** YAML 1.2 scalars: `on`, `off`, `yes` and `no` are strings, and only `true`/`false` are booleans. Duplicate keys, explicit tags and merge keys (`<<`) are errors. Unknown keys are errors everywhere. Durations are a whole number with `ms`, `s`, `m`, `h` or `d`.
+
+**Shape.** Types, enums and required fields as in §1–§11, plus: `front` has exactly one of `persona` and `instructions`; `collect` binds exactly one name, and `readback` applies only to entity types; `account_no` and `id` need a `pattern` that compiles; `if` nests at most two deep; router `rules` need `mode: rules_then_classifier`; an `llm_judge` watcher needs a `prompt`, a `classifier` needs `labels`, and `action: steer` needs a `note`; an eval needs a `script` or `simulate`; `sms` and `schedule` triggers are rejected with the decision that removed them.
+
+**Names and scope.** In `instructions`, a value that looks like a name (`products`) is a persona document; anything else is inline text. A flow can read its own bindings (`collect`, `choose`, `as`), `customer`, and `args` (the arguments it was delegated with). A webhook trigger reads `event`; evals read `result` and `customer`. A name is bound once per flow; a name bound inside one branch of an `if` is visible after it only if both branches bind it or the other branch ends the flow. Template filters are `date_spoken`, `time_spoken`, `money` and `digits_spoken`. Steps after a `result` or `handoff` are unreachable and rejected.
+
+**References.** Every worker, tool, `tool.operation`, knowledge base, watcher and eval step name must exist. A webhook tool has no operations; an MCP operation must be in `allow`. `on_no` names an earlier `collect`. `delegate` must not form a cycle.
+
+**Side effects.** Webhook tools have `side_effects: true` unless they say otherwise. A side-effecting `call_tool` needs an earlier `confirm` on every path to it, or an entry in `policies.approval`. An LLM or tool worker that uses a side-effecting tool needs an approval entry. Connector and MCP operations are checked once WP-1.10 adds their effects to the connector catalog.
+
+**Channels and languages.** Voice (web voice or phone) needs `languages.voice` and `front.voice`; text (web chat or WhatsApp) needs `languages.text`. In `cascaded` mode every voice language needs a voice in `front.voice.voices`, and every voice there must be a voice language. `languages.default` must be enabled for voice or text. The platform's enabled languages (the M0 gate, D-019) are checked when the caller passes them. `front.profiles`, eval channels, inbound triggers, webhook trigger actions and `verify: otp` (which needs WhatsApp) must refer to configured channels. `speech_to_speech` cannot be used with `restricted_topics` or `never_say`. Latency assertions are for voice evals only.
+
+**Documents.** When the workspace's documents are passed in, `persona`, document-named `instructions` and knowledge sources that are not URLs must name a document of the right kind (`persona` or `knowledge`). The loader returns the documents it resolved with their versions.
+
+Conditions (`if:`, router rules, approval policies) are parsed by the flow engine (WP-1.5), not by the loader.

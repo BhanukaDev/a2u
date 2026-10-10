@@ -1,0 +1,5 @@
+agent: bad
+front:
+  instruction: Hi.  # error: front.instruction | unknown field 'instruction'
+channels:
+  chanel: { chat: true }  # error: channels.chanel | unknown field 'chanel'

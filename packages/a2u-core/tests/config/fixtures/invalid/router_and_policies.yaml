@@ -1,0 +1,32 @@
+agent: bad
+front:
+  instructions: Hi.
+  voice:
+    mode: speech_to_speech
+channels:
+  web: { chat: true, voice: true }
+router:
+  mode: classifier
+workers:
+  billing:  # error: workers.billing.description | classifier routing needs a description
+    kind: llm
+    instructions: Billing help.
+  verify_me:
+    kind: flow
+    description: Check identity
+    steps:
+      - verify: otp  # error: workers.verify_me.steps[0].verify | otp is sent over WhatsApp and needs channels.whatsapp
+languages: { default: en, voice: [en], text: [en] }
+policies:
+  speech:
+    restricted_topics:  # error: policies.speech.restricted_topics | speech_to_speech has no claim check
+      refunds: { sources: [] }
+  watch:
+    - name: judge
+      kind: llm_judge
+      prompt: "Was the agent rude?"
+      action: flag
+    - name: judge  # error: policies.watch[1].name | duplicate watcher 'judge'
+      kind: llm_judge
+      prompt: "Was the agent slow?"
+      action: flag

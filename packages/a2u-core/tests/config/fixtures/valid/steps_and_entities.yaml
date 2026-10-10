@@ -1,0 +1,72 @@
+# Every flow step (spec §5.2) and the entity types (§5.5).
+agent: kyc-desk
+languages: { default: si, text: [si, en] }
+front:
+  instructions: You help customers open accounts.
+channels:
+  web: { chat: true, mode: both }
+  whatsapp: { account: kyc-desk }
+
+workers:
+  onboarding:
+    kind: flow
+    description: Open a savings account
+    steps:
+      - collect: { nic: nic_lk }
+      - collect: { mobile: { type: phone, region: LK } }
+      - collect: { amount: { type: money, currency: LKR, max: 500000 } }
+      - collect: { name: person_name, readback: spell }
+      - collect: { home: { type: address, country: LK } }
+      - collect: { email: { type: email, mx_check: true }, timeout: 2h }
+      - collect: { account: { type: account_no, pattern: "\\d{10}", check_digit: luhn } }
+      - collect: { visit: { type: date, min: today, max: "+30d" } }
+      - collect: { note: string, retries: 1 }
+      - choose: { branch: "choose(branches.nearby, near=home)", max_options: 3 }
+      - choose: { product: [savings, fixed_deposit] }
+      - verify: { knowledge: [dob, postcode] }
+      - confirm: "Open a ${product} account at ${branch.name} with ${amount | money}?"
+      - call_tool: { name: open_account, args: { nic: "${nic}", mobile: "${mobile}", amount: "${amount}" }, as: opened }
+      - delegate: { worker: welcome, args: { account: "${opened.id}" }, background: true }
+      - if: "opened.status == 'pending'"
+        then:
+          - if: "amount > 100000"
+            then: [ { handoff: human } ]
+            else: [ { result: { say: "Your account is pending review." } } ]
+        else: []
+      - result:
+          data: { account_id: "${opened.id}" }
+          say: "Your account number is ${opened.id | digits_spoken}."
+
+  welcome:
+    kind: flow
+    description: Send the welcome pack
+    filler: off
+    steps:
+      - confirm: { text: "Shall I send the welcome pack?" }
+      - call_tool: { name: send_welcome, args: { account: "${args.account}" } }
+      - handoff: concierge
+
+  concierge:
+    kind: llm
+    instructions: concierge
+    tools: [branches.nearby]
+
+tools:
+  branches:
+    type: connector
+    connector: branch_directory
+    connection: kyc-branches
+  open_account:
+    type: webhook
+    url: https://bank.example.lk/a2u/accounts
+    input: { nic: string, mobile: string, amount: number }
+    output: { id: string, status: string }
+    side_effects: true
+  send_welcome:
+    type: webhook
+    url: https://bank.example.lk/a2u/welcome
+    input: { account: string }
+    output: {}
+
+policies:
+  pii: mask

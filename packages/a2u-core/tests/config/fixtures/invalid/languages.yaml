@@ -1,0 +1,13 @@
+agent: bad
+languages:
+  default: fr  # error: languages.default | 'fr' is not enabled for voice or text
+  voice: [en, si]  # error: languages.voice[1] | voice language 'si' has no voice in front.voice.voices
+  text: [en]
+front:
+  instructions: Hi.
+  voice:
+    voices:
+      en: { voice_id: maya }
+      ta: { voice_id: ta-1 }  # error: front.voice.voices.ta | 'ta' is not in languages.voice
+channels:
+  web: { chat: true, voice: true }

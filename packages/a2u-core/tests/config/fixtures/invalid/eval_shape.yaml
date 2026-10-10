@@ -1,0 +1,15 @@
+agent: bad
+front:
+  instructions: Hi.
+channels:
+  web: { chat: true }
+evals:
+  - name: no script  # error: evals[0] | needs a script or simulate
+    channel: web_chat
+    assert:
+      - not_said: "refund"
+  - name: odd assertion
+    channel: web_chat
+    simulate: { goal: "chat", persona: polite }
+    assert:
+      - smells: fine  # error: evals[1].assert[0] | each assertion must be one of

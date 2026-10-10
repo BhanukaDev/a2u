@@ -1,0 +1,10 @@
+agent: bad
+front:
+  instructions: Hi.
+channels:
+  web: { chat: true }
+triggers:
+  - inbound: [web, whatsapp]  # error: triggers[0].inbound[1] | channel 'whatsapp' is not configured
+  - webhook: hubspot.new_lead
+    action: call  # error: triggers[1].action | call needs channels.phone
+    to: "${lead.phone}"  # error: triggers[1].to | '${lead.phone}' is not bound here

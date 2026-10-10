@@ -1,0 +1,6 @@
+agent: bad
+front:
+  instructions: Hi.
+  instructions: Hello.  # error: front.instructions | duplicate key 'instructions' (first at line 3)
+channels:
+  web: { chat: true }

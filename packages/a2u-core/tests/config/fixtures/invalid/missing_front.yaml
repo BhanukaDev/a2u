@@ -1,0 +1,3 @@
+agent: bad  # error: front | missing required field 'front'
+channels:
+  web: { chat: true }

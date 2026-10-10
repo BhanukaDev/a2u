@@ -1,0 +1,5 @@
+agent: Sunrise Dental  # error: agent | lowercase slug
+front:
+  instructions: Hi.
+channels:
+  web: { chat: true }

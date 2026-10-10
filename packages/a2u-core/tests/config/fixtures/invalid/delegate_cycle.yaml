@@ -1,0 +1,19 @@
+agent: bad
+front:
+  instructions: Hi.
+channels:
+  web: { chat: true }
+workers:
+  a:
+    kind: flow
+    steps:
+      - delegate: { worker: b }  # error: workers.a.steps[0].delegate.worker | delegate cycle: a -> b -> a
+  b:
+    kind: flow
+    steps:
+      - delegate: { worker: a }  # error: workers.b.steps[0].delegate.worker | delegate cycle: b -> a -> b
+  c:
+    kind: flow
+    steps:
+      - delegate: { worker: c }  # error: workers.c.steps[0].delegate.worker | delegate cycle: c -> c
+      - handoff: nobody  # error: workers.c.steps[1].handoff | unknown worker 'nobody'

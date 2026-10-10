@@ -1,0 +1,26 @@
+agent: bad
+front:
+  instructions: Hi.
+channels:
+  web: { chat: true }
+workers:
+  refunds:
+    kind: flow
+    steps:
+      - collect: { order: string }
+      - call_tool: { name: refund, args: { id: "${order}" } }  # error: workers.refunds.steps[1].call_tool.name | side-effecting tool 'refund' needs an earlier confirm or an approval policy
+      - if: "order == 'x'"
+        then: [ { confirm: "Refund it?" } ]
+        else: []
+      - call_tool: { name: refund, args: { id: "${order}" } }  # error: workers.refunds.steps[3].call_tool.name | side-effecting tool 'refund' needs an earlier confirm or an approval policy
+  agentic:
+    kind: llm
+    instructions: Handle refunds.
+    tools: [refund]  # error: workers.agentic.tools[0] | side-effecting tool 'refund' needs an approval policy
+  direct:
+    kind: tool
+    tool: refund  # error: workers.direct.tool | side-effecting tool 'refund' needs an approval policy
+tools:
+  refund:
+    type: webhook
+    url: https://shop.example.com/refund

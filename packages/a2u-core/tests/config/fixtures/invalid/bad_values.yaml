@@ -1,0 +1,20 @@
+agent: bad
+languages:
+  text: [en, english]  # error: languages.text[1] | language code
+front:
+  instructions: Hi.
+  model: claude-haiku  # error: front.model | provider:model
+  filler: sometimes  # error: front.filler | auto, off or a list of phrases
+  handoff_number: "011 234 5600"  # error: front.handoff_number | international format
+channels:
+  web: { chat: true, mode: open }  # error: channels.web.mode | 'anonymous', 'verified' or 'both'
+memory:
+  retention: 1 year  # error: memory.retention | duration such as
+  summary_after_turns: 0  # error: memory.summary_after_turns | greater than 0
+tools:
+  faq: { type: webhook, url: "http://faq.example.com", side_effects: false }  # error: tools.faq.url | https
+policies:
+  speech:
+    claim_check: true  # error: policies.speech.claim_check | 'on' or 'off'
+  task_delivery:
+    order: [live, sms]  # error: policies.task_delivery.order[1] | sms is not a channel in v1 (D-013)

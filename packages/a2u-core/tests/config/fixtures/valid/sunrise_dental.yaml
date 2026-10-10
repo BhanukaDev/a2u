@@ -1,0 +1,186 @@
+# Full agent built from the spec's examples (§1–§11). Blocks copied from
+# docs/agent-config-spec.md must stay verbatim: test_spec_examples checks it.
+agent: sunrise-dental            # slug, unique per workspace
+description: Front desk for Sunrise Dental
+
+languages:                       # §1.1
+  default: en
+  voice: [en, ta]
+  text: [en, si, ta]
+
+front:
+  persona: front_desk                 # name of a persona document (editable in the console), or inline `instructions:`
+  model: anthropic:claude-haiku-5-5   # fast model for voice
+  profiles:                           # optional per-channel overrides
+    whatsapp: { model: anthropic:claude-sonnet-5-5, max_reply_chars: 600 }
+    web_chat: { model: anthropic:claude-sonnet-5-5 }
+  voice:
+    mode: cascaded                    # cascaded | speech_to_speech
+    stt: deepgram:nova-3              # default; per-language override below
+    tts: cartesia:sonic
+    voices:                           # one voice per voice language
+      en: { voice_id: maya }
+      ta: { tts: google, voice_id: ta-IN-Wavenet-A, stt: google }
+  knowledge: [clinic_faq, price_list] # read-only, answered directly
+  filler: auto                        # default filler when a worker declares none: auto | off | [phrases]
+  handoff_number: "+94 11 234 5600"   # human fallback for calls
+
+channels:
+  web:      { chat: true, voice: true, mode: verified }   # anonymous | verified | both
+  phone:    { numbers: ["+94 11 234 5678"], recording: false }   # test number + PIN is always available
+  whatsapp: { account: sunrise-dental }
+
+memory:
+  identify_by: [phone, whatsapp, web_user]
+  link_web_to_phone: verified_only
+  summary_after_turns: 10
+  facts: true
+  fact_sensitivity_default: low       # low facts may be volunteered; high facts only after verify
+  retention: 365d
+
+workers:
+  bookings:
+    kind: flow
+    description: Move an existing appointment
+    filler: ["Let me check the calendar."]
+    steps:
+      - verify: otp
+      - collect: { appointment: "choose(calendar.upcoming)" }
+      - collect: { slot: "choose(calendar.free_slots, doctor=appointment.doctor)", retries: 3 }
+      - confirm: { text: "Move your appointment to ${slot}?", on_no: slot }
+      - call_tool: { name: calendar.move, args: { id: "${appointment.id}", to: "${slot}" }, as: moved }
+      - result:
+          data: { slot: "${slot}", appointment_id: "${appointment.id}" }
+          say: "Done. Your appointment is now on ${slot | date_spoken}."
+
+  refunds:
+    kind: flow
+    description: Refunds for damaged orders
+    filler: ["Let me pull up that order."]
+    steps:
+      - collect: { order_no: { type: id, pattern: "\\d{8}" }, readback: digits }
+      - call_tool: { name: order_lookup, args: { order_no: "${order_no}" }, as: order }
+      - if: "order.status == 'damaged' && order.total <= 100"
+        then: [ { call_tool: { name: issue_refund, args: { id: "${order.id}" } } } ]
+        else: [ { handoff: human } ]
+      - result:
+          say: "Your refund for order ${order_no | digits_spoken} is on its way."
+
+router:
+  mode: rules_then_classifier     # handoff (default) | classifier | rules_then_classifier
+  model: fast                     # classifier model alias
+  fallback: front                 # front agent answers itself
+  rules:
+    - if: "customer.has_upcoming_appointment"
+      prefer: bookings
+  examples:
+    - { text: "I want my money back", worker: refunds }
+
+triggers:
+  - inbound: [phone, whatsapp, web]
+
+  - api: start_conversation          # POST /v1/agents/{agent}/conversations  { to, channel, context, goal }
+
+  - webhook: hubspot.new_lead
+    action: call
+    to: "${event.lead.phone}"
+    within: 60s
+    context: { name: "${event.lead.name}" }
+    goal: qualify_and_book
+
+tools:
+  insurer_check:
+    type: webhook
+    url: https://api.sunrise.lk/a2u/insurance
+    method: POST
+    input: { policy_no: string }
+    output: { covered: bool, percent: number }
+    timeout: 8s
+    retries: 2
+    side_effects: false
+  calendar:
+    type: connector
+    connector: google_calendar
+    connection: sunrise-gcal
+  crm:
+    type: mcp
+    server: https://mcp.example.com
+    allow: [lookup_patient]          # explicit allowlist of MCP tools
+  order_lookup:
+    type: webhook
+    url: https://api.sunrise.lk/a2u/orders
+    method: GET
+    input: { order_no: string }
+    output: { id: string, status: string, total: number }
+    side_effects: false
+  issue_refund:
+    type: webhook
+    url: https://api.sunrise.lk/a2u/refunds
+    input: { id: string }
+    output: { refund_id: string }
+    side_effects: true
+
+knowledge:
+  clinic_faq: { sources: [docs/faq.pdf, "https://sunrise.lk/faq"], refresh: weekly }
+  price_list: { sources: [docs/prices.xlsx] }
+  refund_policy: { sources: [docs/refunds.pdf] }
+
+policies:
+  pii: mask                         # mask | off
+  approval: { issue_refund: "amount > 100" }
+  collect: { retries: 2, timeout: 24h }          # defaults for collect steps
+  task_delivery:
+    order: [live, whatsapp, whatsapp_template]  # no sms in v1
+    consent: required                           # required (default) | assert_by_client
+    ask_consent: "Can I send you the result on WhatsApp when it's ready?"
+  max_call_minutes: 20
+  idle: { prompt_after: 30s, hangup_after: 45s }  # "are you still there?", then a polite hang-up
+  recording_disclosure: true
+
+  speech:                                         # D-027
+    claim_check: on                               # on (default) | off (only for internal test agents)
+    restricted_topics:                            # answer only from these sources, otherwise hand off
+      refunds: { sources: [refund_policy], otherwise: handoff }
+      medical_advice: { sources: [], otherwise: "I can't advise on that, but I can connect you to a nurse." }
+    never_say:
+      - "promise or guarantee a refund"
+      - "quote a price not in price_list"
+    fallback: "Let me confirm that for you."      # spoken in place of an unsupported sentence on voice
+
+  watch:                                          # D-028, asynchronous, never blocks a turn
+    - name: unsupported_commitment
+      kind: llm_judge                             # llm_judge | classifier | rules
+      model: fast
+      prompt: "Did the agent promise anything the evidence does not support?"
+      action: flag                                # steer | escalate | flag | remediate
+    - name: frustration
+      kind: classifier
+      labels: [frustrated, neutral]
+      when: "frustrated for 2 turns"
+      action: steer
+      note: "Acknowledge the frustration and offer a human."
+
+evals:
+  - name: reschedule happy path
+    channel: phone
+    customer: { phone: "+94771234567", traits: { has_upcoming_appointment: true } }
+    script:
+      - user: "I need to move Thursday's appointment"
+      - expect: { worker: bookings, step: verify }
+    simulate: { goal: "move to Wednesday afternoon", persona: polite }
+    assert:
+      - tool_called: calendar.move
+      - said: "${result.slot | date_spoken}"      # exact for flow results
+      - latency_p95_ms: 1500                       # voice evals only
+      - no_unsupported_claims: true                # every information/commitment sentence grounded
+      - captured: { nic: "200217701234" }          # entity bound exactly, after read-back
+
+  - name: declines the move, picks another slot
+    channel: whatsapp
+    simulate: { goal: "say no to the first slot, then accept the second", persona: terse }
+    assert:
+      - step_reached: { worker: bookings, step: slot, times: 2 }
+      - tool_called: calendar.move
+      - not_said: "refund"
+      - claim_class: { contains: commitment, from: result.say }
+      - watch_flagged: { watcher: unsupported_commitment, expect: false }

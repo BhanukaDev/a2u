@@ -1,0 +1,6 @@
+agent: bad
+front:  # error: front | exactly one of persona or instructions
+  persona: front_desk
+  instructions: Hi.
+channels:
+  web: { chat: true }

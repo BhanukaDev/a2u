@@ -1,0 +1,8 @@
+agent: bad
+front:
+  instructions: Hi.
+channels:
+  web: { chat: true }
+triggers:
+  - schedule: "0 9 * * *"  # error: triggers[0] | schedule triggers are after v1 (D-022)
+  - cron: daily  # error: triggers[1] | each trigger must be one of

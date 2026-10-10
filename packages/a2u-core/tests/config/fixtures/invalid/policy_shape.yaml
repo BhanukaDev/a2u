@@ -1,0 +1,21 @@
+agent: bad
+front:
+  instructions: Hi.
+channels:
+  web: { chat: true }
+router:
+  rules:  # error: router.rules | rules are used only by rules_then_classifier
+    - if: "true"
+      prefer: billing
+policies:
+  watch:
+    - name: judge  # error: policies.watch[0] | llm_judge needs a prompt
+      kind: llm_judge
+      action: flag
+    - name: sentiment  # error: policies.watch[1] | classifier needs labels
+      kind: classifier
+      action: flag
+    - name: nudge  # error: policies.watch[2] | steer needs a note
+      kind: rules
+      when: "asked for a refund twice"
+      action: steer

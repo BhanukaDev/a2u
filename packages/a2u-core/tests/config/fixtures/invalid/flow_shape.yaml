@@ -1,0 +1,24 @@
+agent: bad
+front:
+  instructions: Hi.
+channels:
+  web: { chat: true }
+workers:
+  bookings:
+    kind: flow
+    steps:
+      - collect: { day: date, time: time }  # error: workers.bookings.steps[0].collect | collect binds exactly one name
+      - collect: { note: string, readback: digits }  # error: workers.bookings.steps[1].collect | readback applies only to entity types
+      - collect: { acct: { type: account_no } }  # error: workers.bookings.steps[2].collect.acct.pattern | missing required field 'pattern'
+      - collect: { acct2: { type: id, pattern: "[0-9" } }  # error: workers.bookings.steps[3].collect.acct2.pattern | invalid pattern
+      - collect: { colour: colour }  # error: workers.bookings.steps[4].collect.colour | unknown type 'colour'
+      - ask: { name: string }  # error: workers.bookings.steps[5] | each step must be one of
+      - verify: sms  # error: workers.bookings.steps[6].verify | 'otp'
+  empty:
+    kind: flow
+    steps: []  # error: workers.empty.steps | at least 1 item
+  mystery:  # error: workers.mystery | kind must be llm, tool or flow
+    kind: robot
+  human:  # error: workers.human | reserved
+    kind: llm
+    instructions: Hi.

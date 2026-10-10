@@ -1,0 +1,25 @@
+agent: bad
+front:
+  instructions: Hi.
+channels:
+  web: { chat: true }
+workers:
+  bookings:
+    kind: flow
+    steps:
+      - collect: { slot: date }
+      - result: { say: "Booked." }
+evals:
+  - name: checks
+    channel: web_chat
+    simulate: { goal: "book", persona: polite }
+    assert:
+      - latency_p95_ms: 900  # error: evals[0].assert[0] | latency_p95_ms is for voice evals only
+      - tool_called: calendar.move  # error: evals[0].assert[1].tool_called | unknown tool 'calendar'
+      - step_reached: { worker: bookings, step: day }  # error: evals[0].assert[2].step_reached.step | 'bookings' has no step 'day'
+      - watch_flagged: { watcher: nobody, expect: true }  # error: evals[0].assert[3].watch_flagged.watcher | unknown watcher 'nobody'
+      - said: "${slot}"  # error: evals[0].assert[4].said | '${slot}' is not bound here
+  - name: wrong channel
+    channel: whatsapp  # error: evals[1].channel | channel 'whatsapp' is not configured
+    script:
+      - expect: { worker: billing }  # error: evals[1].script[0].expect.worker | unknown worker 'billing'

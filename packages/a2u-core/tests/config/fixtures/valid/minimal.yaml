@@ -1,0 +1,5 @@
+agent: minimal
+front:
+  instructions: You are a helpful front desk.
+channels:
+  web: { chat: true }
