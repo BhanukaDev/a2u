@@ -538,7 +538,7 @@ class HandoffStep(_Spec):
 
 
 class IfStep(_Spec):
-    condition: str = Field(alias="if")  # CEL subset, parsed by the flow engine (WP-1.5)
+    condition: str = Field(alias="if")  # CEL subset (spec §5.3), see a2u_core.conditions
     then: list["Step"]
     else_: list["Step"] = Field(default_factory=lambda: [], alias="else")
 

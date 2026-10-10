@@ -87,10 +87,11 @@ Dependencies are listed where they are not obvious. Within a milestone, WPs are 
 **Done when:** unit tests cover each contract type and permission denial.
 **Note (2026-10-10):** `packages/a2u-core/src/a2u_core/workers`. Gaps filled by D-032. Tool execution is behind a `ToolBackend` protocol that WP-1.10 implements; `FakeToolBackend` stands in for tests. LLM worker knowledge waits for WP-1.9; DBOS durability for WP-1.11.
 
-### [ ] WP-1.5 Flow engine
+### [x] WP-1.5 Flow engine
 **Reads:** spec §5.2–5.4, architecture §4.4.
 **Build:** step interpreter for all nine steps; `collect` retries and timeout; `confirm.on_no`; condition evaluator (CEL subset); `say` rendering with filters per channel; nesting depth checks.
 **Done when:** the spec's booking flow runs end to end against fake tools, including the decline-and-pick-again path; every step has tests.
+**Note (2026-10-10):** `packages/a2u-core/src/a2u_core/flows` and `a2u_core/conditions.py`. Gaps filled by D-033. The loader now parses conditions. Approval conditions are evaluated against call arguments, which amends D-032. `verify` and `delegate` run through `Verifier` and `Delegator` interfaces, with fakes for tests; the real ones arrive with memory/WhatsApp and WP-1.11. Entity values get format checks only (`BasicCapture`) until WP-1.20.
 
 ### [ ] WP-1.6 Router
 **Reads:** spec §6, PRD §6.4.

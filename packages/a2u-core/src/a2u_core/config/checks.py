@@ -11,6 +11,7 @@ from typing import Literal
 
 from pydantic import JsonValue
 
+from a2u_core.conditions import ConditionSyntaxError, parse_condition
 from a2u_core.config.models import (
     FLOW_ROOTS,
     REFERENCE,
@@ -177,6 +178,16 @@ class _Checker:
                 self.error(path, f"'${{{expr}}}' is not bound here")
             if name and name not in FILTERS:
                 self.error(path, f"unknown filter {name!r}; expected one of {', '.join(FILTERS)}")
+
+    def condition(self, text: str, path: Path, roots: set[str] | None = None) -> None:
+        """Parse a condition; with `roots`, also check that every name it reads is bound."""
+        try:
+            parsed = parse_condition(text)
+        except ConditionSyntaxError as e:
+            self.error(path, f"invalid condition: {e}")
+            return
+        for name in sorted(parsed.references - (roots if roots is not None else parsed.references)):
+            self.error(path, f"{name!r} is not bound here")
 
     def json_templates(self, value: JsonValue, path: Path, roots: set[str]) -> None:
         if isinstance(value, str):
@@ -373,6 +384,7 @@ class _Checker:
                     return self.unreachable(steps, path, i), True
                 case IfStep():
                     names.add("if")
+                    self.condition(step.condition, (*at, "if"), roots)
                     if depth >= MAX_IF_DEPTH:
                         self.error(at, f"if nesting depth is at most {MAX_IF_DEPTH}")
                         continue
@@ -434,6 +446,7 @@ class _Checker:
         if router.fallback != "front":
             self.worker_ref(router.fallback, ("router", "fallback"))
         for i, rule in enumerate(router.rules):
+            self.condition(rule.condition, ("router", "rules", i, "if"))
             self.worker_ref(rule.prefer, ("router", "rules", i, "prefer"))
         for i, example in enumerate(router.examples):
             self.worker_ref(example.worker, ("router", "examples", i, "worker"))
@@ -465,8 +478,10 @@ class _Checker:
 
     def policies(self) -> None:
         policies = self.c.policies
-        for ref in policies.approval:
+        for ref, condition in policies.approval.items():
             self.tool(ref, ("policies", "approval", ref))
+            # Approval conditions read the call's arguments, which are known only at call time.
+            self.condition(condition, ("policies", "approval", ref))
         speech = policies.speech
         for topic, rule in speech.restricted_topics.items():
             for i, kb in enumerate(rule.sources):

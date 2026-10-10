@@ -113,13 +113,13 @@ workers:
 
 | Step | Shape | Behaviour |
 |---|---|---|
-| `collect` | `{ name: type \| entity \| choose(source), retries: 2, timeout: 2h, readback: digits }` | Emits `NeedsInput`. The front agent asks; the value is validated against the type. Entity types (§5.5) are parsed, validated and read back by code before binding, and a format failure does not use up a retry. After `retries` invalid answers the flow fails with `invalid_input`; after `timeout` with `timeout`. Defaults come from `policies.collect` |
-| `choose` | `{ name: choose(tool_or_list), max_options: 3 }` | Offers options; the user picks one. Renders as a WhatsApp list, web buttons, or spoken options |
-| `confirm` | `{ text: "with ${vars}", on_no: step_name }` or a bare string | Explicit yes/no. "No" jumps to the named `collect` step, or ends the flow with `Failed(reason="declined")` if `on_no` is absent. Renders as WhatsApp buttons |
+| `collect` | `{ name: type \| entity \| choose(source), retries: 2, timeout: 2h, readback: digits }` | Emits `NeedsInput`. The front agent asks; the value is validated against the type. Entity types (§5.5) are parsed, validated and read back by code before binding, and a format failure does not use up a retry. `retries: n` allows n re-asks; the next invalid answer fails the flow with `invalid_input`. An unanswered ask fails it after `timeout` with `timeout`. Defaults come from `policies.collect` |
+| `choose` | `{ name: choose(tool_or_list), max_options: 3 }` | Offers options; the user picks one and the whole item is bound. The source is a bound list or a tool returning a list or `{ items: [...] }`; an object's `id` is its value and `label` or `name` its label. Renders as a WhatsApp list, web buttons, or spoken options |
+| `confirm` | `{ text: "with ${vars}", on_no: step_name }` or a bare string | Explicit yes/no. "No" jumps back to the named `collect` step and forgets everything bound from there on, or ends the flow with `Failed(reason="declined")` if `on_no` is absent. Renders as WhatsApp buttons |
 | `verify` | `otp \| knowledge: [dob, postcode]` | Identity check before continuing. `otp` goes over WhatsApp in v1 |
 | `call_tool` | `{ name, args, as }` | Calls a tool; the result is bound to `as` |
 | `delegate` | `{ worker, args, as, background }` | Runs another worker |
-| `handoff` | `human \| worker_name` | Ends this flow and passes the conversation on |
+| `handoff` | `human \| worker_name` | Ends this flow and passes the conversation on; the flow's `Result` carries the last tool data |
 | `if` | `{ if: condition, then: [steps], else: [steps] }` | Branch on bound values (§5.3). Nesting depth ≤ 2 |
 | `result` | `{ data: {...}, say: "..." }` | Final `Result`. `say` is rendered by code from bound values and sent or spoken verbatim (D-017). `data` defaults to the last tool result |
 
@@ -128,6 +128,8 @@ No loops, no variables apart from `collect`/`as` bindings, no arbitrary code. A 
 ### 5.3 Conditions
 
 CEL-style expressions over bound values and customer traits: comparison, `&&`, `||`, `!`, `in`, `has()`, string `startsWith`. No function definitions, no I/O.
+
+Values of different types are never equal; `<` and friends need two numbers or two strings; `&&` and `||` need bools and short-circuit; a name that is not bound is an error except inside `has()`. A condition that cannot be evaluated fails the flow with `condition_error` (D-033). Approval conditions in `policies.approval` read the tool call's arguments (`amount > 100`); when one cannot be evaluated, approval is required.
 
 ```yaml
 - if: "order.status == 'damaged' && order.total <= 100"
@@ -153,7 +155,7 @@ bookings:
         say: "Done. Your appointment is now on ${slot | date_spoken}."
 ```
 
-Templates in `say` support filters for rendering values: `date_spoken`, `time_spoken`, `money`, `digits_spoken` (reads an ID digit by digit on voice). Rendering is per channel: `date_spoken` produces "Thursday the 16th at 3:30 pm" on voice and "Thu 16 Oct, 3:30 pm" on text.
+Templates in `say` support filters for rendering values: `date_spoken`, `time_spoken`, `money`, `digits_spoken` (reads an ID digit by digit on voice). Rendering is per channel: `date_spoken` produces "Thursday the 16th at 3:30 pm" on voice and "Thu 16 Oct, 3:30 pm" on text. A value that cannot be rendered fails the flow rather than being guessed. In `args` and `data`, a string that is exactly `${ref}` keeps the value's type.
 
 ### 5.5 Entity types
 
@@ -233,7 +235,7 @@ tools:
     allow: [lookup_patient]          # explicit allowlist of MCP tools
 ```
 
-`side_effects: true` tools are only callable from flow steps after a `confirm`, or behind an approval policy.
+`side_effects: true` tools are only callable from flow steps after a `confirm`, or behind an approval policy whose condition is false for the call's arguments. When the condition is true the call needs an approval, which pauses the task (WP-5.1).
 
 ## 9. Knowledge
 
@@ -336,4 +338,4 @@ Other claim assertions: `not_said: "refund"`, `claim_class: { contains: commitme
 
 **Documents.** When the workspace's documents are passed in, `persona`, document-named `instructions` and knowledge sources that are not URLs must name a document of the right kind (`persona` or `knowledge`). The loader returns the documents it resolved with their versions.
 
-Conditions (`if:`, router rules, approval policies) are parsed by the flow engine (WP-1.5), not by the loader.
+**Conditions.** Every condition (`if:`, router rules, approval policies) is parsed when the config loads, and a flow `if` may read only names bound before it, `customer` and `args` (D-033). Approval conditions read the tool's call arguments, so only their syntax is checked.

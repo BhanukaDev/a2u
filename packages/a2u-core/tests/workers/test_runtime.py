@@ -227,12 +227,24 @@ def test_llm_worker_cannot_set_say(config: AgentConfig, backend: FakeToolBackend
 def test_llm_worker_denied_tool_fails_the_worker(
     config: AgentConfig, backend: FakeToolBackend
 ) -> None:
-    # issue_refund is listed but under an approval policy: not offered, and refused if called.
-    script = Script(*([call("issue_refund", {"order_id": "o1", "amount": 50})],) * 10)
+    # issue_refund is under approval when amount > 100: offered, but this call is refused.
+    script = Script(*([call("issue_refund", {"order_id": "o1", "amount": 500})],) * 10)
     run = asyncio.run(llm(config, backend, script, worker="refunds").run({}, CTX))
-    assert "issue_refund" not in script.offered
-    assert isinstance(run.outcome, Failed)
+    assert "issue_refund" in script.offered
+    assert run.outcome == Failed(reason="permission_denied: issue_refund: needs_approval")
     assert backend.calls == []
+
+
+def test_llm_worker_may_call_a_tool_its_approval_condition_clears(
+    config: AgentConfig, backend: FakeToolBackend
+) -> None:
+    script = Script(
+        [call("issue_refund", {"order_id": "o1", "amount": 50})],
+        [call("finish", {"data": {"refunded": True}})],
+    )
+    run = asyncio.run(llm(config, backend, script, worker="refunds").run({}, CTX))
+    assert run.outcome == Result(data={"refunded": True})
+    assert [ref for ref, _, _ in backend.calls] == ["issue_refund"]
 
 
 def test_llm_worker_permission_check_runs_at_call_time(

@@ -107,7 +107,7 @@ class Failed(BaseModel):
 
 - A worker ends with `Result`, `NeedsInput` or `Failed`. `Progress` is reported while it runs, not returned. Anything else, including an exception, a timeout or a denied tool call, becomes `Failed` (D-032).
 - LLM workers end through three output tools, `finish`, `ask_user` and `give_up`; they have no text output and cannot set `say`.
-- Every tool call is checked when it is made against the worker's scope: listed, existing, MCP-allowlisted, and for side effects, after `confirm` and through any approval policy. A tool error fails the worker.
+- Every tool call is checked when it is made against the worker's scope: listed, existing, MCP-allowlisted, and for side effects, after `confirm` or with an approval condition that is false for the call's arguments (D-033). A tool error fails the worker.
 - Code: `a2u_core.workers` (`contract`, `tools`, `runtime`). Flow workers run in the flow engine (§4.4) and use the same scoped tool calls.
 
 ### 4.3 Task lifecycle
@@ -127,6 +127,7 @@ Config flows compile to a step list interpreted by `a2u-core`. Each step is a du
 - `collect` emits `NeedsInput`; the engine validates the answer against the type, re-asks up to `retries`, then fails the flow with `Failed(reason="invalid_input")`. A `timeout` fails it with `Failed(reason="timeout")`.
 - `confirm` on "no" jumps to the step named in `on_no`, or ends with `Failed(reason="declined")` when `on_no` is absent.
 - `result` renders `say` from bound values and returns `Result(data, say=...)`.
+- Code: `a2u_core.flows` (`engine`, `render`, `inputs`) and `a2u_core.conditions`. The engine holds no run state: `start`, `resume` and `expire` take and return a JSON `FlowState`, which the task stores between steps (WP-1.11). `handoff` is reported on `FlowRun.handoff`. `verify` and `delegate` go through `Verifier` and `Delegator` interfaces. Rules the spec left open are in D-033.
 
 ### 4.5 Result rendering and the claim check
 

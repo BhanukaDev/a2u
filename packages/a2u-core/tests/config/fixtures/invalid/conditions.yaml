@@ -1,0 +1,28 @@
+# Conditions are parsed when the config loads (spec §5.3, D-033).
+agent: bad
+front:
+  instructions: Hi.
+channels:
+  web: { chat: true }
+workers:
+  refunds:
+    kind: flow
+    description: Refunds
+    steps:
+      - collect: { order_no: string }
+      - if: "order_no = '1'"  # error: workers.refunds.steps[1].if | invalid condition: column 10: unexpected '='
+        then: [ { handoff: human } ]
+      - if: "order.total > 10 && customer.tier == 'gold'"  # error: workers.refunds.steps[2].if | 'order' is not bound here
+        then: [ { handoff: human } ]
+      - if: "has(args.order) || len(order_no) > 3"  # error: workers.refunds.steps[3].if | unknown function 'len'
+        then: [ { handoff: human } ]
+      - result: { say: "Done." }
+router:
+  mode: rules_then_classifier
+  rules:
+    - if: "customer.vip &&"  # error: router.rules[0].if | expected a value
+      prefer: refunds
+tools:
+  refund: { type: webhook, url: "https://x.example/r", input: { amount: number } }
+policies:
+  approval: { refund: "amount >> 100" }  # error: policies.approval.refund | invalid condition

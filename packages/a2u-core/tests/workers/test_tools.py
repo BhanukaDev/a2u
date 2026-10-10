@@ -74,11 +74,37 @@ def test_side_effecting_tool_needs_confirm(config: AgentConfig) -> None:
     scope.check("issue_refund", confirmed=True)
 
 
-def test_approval_policy_gates_the_tool_even_after_confirm(config: AgentConfig) -> None:
-    # The condition is evaluated by WP-1.5 and the pause is WP-5.1; until then, deny.
+def test_approval_condition_decides_with_the_call_arguments(config: AgentConfig) -> None:
+    # policies.approval: { issue_refund: "amount > 100" } (D-033)
     scope = ToolScope(config, ["issue_refund"])
-    assert _denied(scope, "issue_refund") == "needs_approval"
-    assert _denied(scope, "issue_refund", confirmed=True) == "needs_approval"
+    scope.check("issue_refund", args={"order_id": "o1", "amount": 50})
+    with pytest.raises(ToolPermissionDenied) as err:
+        scope.check("issue_refund", args={"order_id": "o1", "amount": 500})
+    assert err.value.reason == "needs_approval"
+
+
+def test_approval_needed_even_after_confirm(config: AgentConfig) -> None:
+    scope = ToolScope(config, ["issue_refund"])
+    with pytest.raises(ToolPermissionDenied) as err:
+        scope.check("issue_refund", confirmed=True, args={"order_id": "o1", "amount": 500})
+    assert err.value.reason == "needs_approval"
+
+
+def test_approval_condition_that_cannot_be_evaluated_needs_approval(config: AgentConfig) -> None:
+    scope = ToolScope(config, ["issue_refund"])
+    assert _denied(scope, "issue_refund") == "needs_approval"  # no arguments
+    assert not scope.allows("issue_refund", args={"order_id": "o1"})  # amount missing
+    assert not scope.allows("issue_refund", args={"order_id": "o1", "amount": "lots"})
+
+
+def test_tools_under_approval_are_offered_to_models(config: AgentConfig) -> None:
+    scope = ToolScope(config, ["search_catalog", "issue_refund", "crm"])
+    assert scope.offerable("search_catalog")
+    assert scope.offerable("issue_refund")  # the call's arguments decide
+    assert not scope.offerable("crm.lookup_customer")  # approval: "true", always needed
+    assert not scope.offerable("insurer_check")  # not in scope
+    config.policies.approval.pop("crm")
+    assert not scope.offerable("crm.lookup_customer")  # side-effecting, no approval policy
 
 
 def test_mcp_operations_count_as_side_effecting_until_declared(config: AgentConfig) -> None:
@@ -97,7 +123,7 @@ def test_allows_is_check_without_raising(config: AgentConfig) -> None:
     assert scope.allows("search_catalog")
     assert not scope.allows("issue_refund")
     assert scope.allows("issue_refund", confirmed=True)
-    assert not scope.allows("crm.lookup_customer", confirmed=True)  # under approval
+    assert not scope.allows("crm.lookup_customer", confirmed=True)  # approval: "true"
 
 
 def test_scoped_tools_check_before_calling(config: AgentConfig, backend: FakeToolBackend) -> None:

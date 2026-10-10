@@ -212,9 +212,12 @@ class LlmWorkerRunner:
         self.scope = ToolScope.for_worker(config, name)
         self.tools = ScopedTools(self.scope, backend)
         self.usage_limits = usage_limits
-        # Offer only what the scope allows now; every call is checked again when made.
+        # Offer what the scope could allow; every call is checked again, with its arguments.
         specs = [
-            s for ref in self.scope.refs for s in backend.describe(ref) if self.scope.allows(s.ref)
+            s
+            for ref in self.scope.refs
+            for s in backend.describe(ref)
+            if self.scope.offerable(s.ref)
         ]
         self._tool_names = {_tool_name(s.ref) for s in specs}
         self.agent = Agent[_RunState, Any](
